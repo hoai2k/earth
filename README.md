@@ -5,8 +5,8 @@ years** of geological history and watch the continents drift into place — from
 present day back through **Pangea**, **Gondwana**, and the early water-worlds of the
 Precambrian. Each geological era comes with a panel of fascinating, sourced facts.
 
-**▶ Live demo:** open `index.html` in any modern browser (it is fully self-contained),
-or view the hosted version linked in the project chat.
+**▶ Live demo:** **https://hoai2k.github.io/earth/**
+(or open `index.html` in any modern browser — it is fully self-contained).
 
 ## Features
 
