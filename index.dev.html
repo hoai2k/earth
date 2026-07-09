@@ -17,6 +17,7 @@
       <div><h1>Chrono·Earth</h1><div class="sub">A journey through deep time</div></div>
     </div>
     <div id="topActions">
+      <button class="iconbtn" id="focusBtn" title="Full-globe mode — hide panels">⤢</button>
       <button class="iconbtn" id="spinBtn" title="Auto-rotate">↻</button>
       <button class="iconbtn" id="cloudBtn" title="Clouds">☁</button>
       <button class="iconbtn" id="resetBtn" title="Reset view">⊙</button>
@@ -24,6 +25,7 @@
   </div>
 
   <div id="info">
+    <button id="infoToggle" title="Collapse / expand facts" aria-label="Collapse or expand facts">⌄</button>
     <div class="eyebrow"><span class="dot"></span><span id="eyebrow">Era</span></div>
     <h2 id="eraTitle">—</h2>
     <div class="range" id="eraRange"></div>
@@ -51,6 +53,7 @@
       </div>
     </div>
   </div>
+  <button id="restoreBtn">☰ Show panels</button>
 </div>
 
 <div id="loader"><div class="spin"></div><p>Assembling the Earth…</p></div>

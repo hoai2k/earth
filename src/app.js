@@ -116,6 +116,15 @@
     $('#cloudBtn').addEventListener('click', ()=>{ const b=$('#cloudBtn'); const on=!b.classList.contains('active'); b.classList.toggle('active',on); globe.setClouds(on); });
     $('#resetBtn').addEventListener('click', ()=>{ globe.resetView(); });
 
+    // full-globe focus mode: hide all panels for unobstructed interaction
+    const app=$('#app');
+    function setFocus(on){ app.classList.toggle('focus',on); $('#focusBtn').classList.toggle('active',on);
+      $('#focusBtn').title = on ? 'Show panels' : 'Full-globe mode — hide panels'; }
+    $('#focusBtn').addEventListener('click', ()=> setFocus(!app.classList.contains('focus')));
+    $('#restoreBtn').addEventListener('click', ()=> setFocus(false));
+    // collapse / expand the facts panel
+    $('#infoToggle').addEventListener('click', ()=> $('#info').classList.toggle('collapsed'));
+
     window.addEventListener('resize', doResize);
   }
 
