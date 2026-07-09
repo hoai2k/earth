@@ -89,9 +89,12 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 #playBtn .ic{font-size:12px}
 
 /* ---- collapse / focus (full-globe) controls ---- */
-#console,#info{transition:opacity .28s ease,transform .28s ease}
-#app.focus #console,#app.focus #info{opacity:0;pointer-events:none;transform:translateY(10px)}
+#console{transition:opacity .28s ease,transform .28s ease}
+#app.focus #console{opacity:0;pointer-events:none;transform:translateY(10px)}
+#app.focus #info{opacity:0;pointer-events:none}
 #focusBtn.active{background:rgba(70,110,220,.4);border-color:rgba(120,160,255,.6)}
+#sheetGrip{display:none;width:44px;height:5px;border-radius:3px;background:rgba(160,185,240,.5);
+  margin:9px auto 7px;flex:none;cursor:grab;touch-action:none}
 #infoToggle{position:absolute;top:12px;right:12px;width:30px;height:30px;border-radius:9px;
   border:1px solid var(--stroke);background:rgba(30,40,66,.65);color:var(--text);cursor:pointer;
   display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;z-index:3;
@@ -143,11 +146,17 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   #maInput{width:56px;font-size:14px}
   #eraSelect{max-width:148px;font-size:12.5px;padding:7px 9px}
 
-  #info{position:relative;order:3;width:auto;margin:0 8px;top:auto;right:auto;
-    max-height:32vh;border-radius:15px 15px 0 0;border-bottom:none;padding:13px 15px 4px}
-  #info h2{font-size:20px;margin:6px 0 2px}
+  /* facts become a draggable bottom sheet, controlled by JS (translateY) */
+  #console{margin-bottom:62px}
+  #info{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;margin:0;z-index:12;
+    height:86vh;max-height:86vh;border-radius:20px 20px 0 0;border-bottom:none;
+    padding:0 17px 14px;display:flex;flex-direction:column;overflow:hidden;touch-action:none;
+    box-shadow:0 -14px 44px rgba(0,0,0,.55);
+    transform:translateY(78vh);transition:transform .32s cubic-bezier(.22,.61,.36,1);will-change:transform}
+  #info h2{font-size:20px;margin:1px 0 2px}
   #info .eyebrow{font-size:11px}
-  #info.collapsed{max-height:none;padding-bottom:13px}
-  #infoToggle{top:10px;right:10px;width:34px;height:34px}
+  #facts{flex:1 1 auto;max-height:none;overflow-y:auto;touch-action:pan-y;padding-bottom:14px}
+  #sheetGrip{display:block}
+  #infoToggle{display:none}
 }
-@media (max-height:560px){ #age{font-size:20px} #info{max-height:26vh} #timeline{height:24px} }
+@media (max-height:560px){ #age{font-size:20px} #timeline{height:24px} }

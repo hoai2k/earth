@@ -91,9 +91,12 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 #playBtn .ic{font-size:12px}
 
 /* ---- collapse / focus (full-globe) controls ---- */
-#console,#info{transition:opacity .28s ease,transform .28s ease}
-#app.focus #console,#app.focus #info{opacity:0;pointer-events:none;transform:translateY(10px)}
+#console{transition:opacity .28s ease,transform .28s ease}
+#app.focus #console{opacity:0;pointer-events:none;transform:translateY(10px)}
+#app.focus #info{opacity:0;pointer-events:none}
 #focusBtn.active{background:rgba(70,110,220,.4);border-color:rgba(120,160,255,.6)}
+#sheetGrip{display:none;width:44px;height:5px;border-radius:3px;background:rgba(160,185,240,.5);
+  margin:9px auto 7px;flex:none;cursor:grab;touch-action:none}
 #infoToggle{position:absolute;top:12px;right:12px;width:30px;height:30px;border-radius:9px;
   border:1px solid var(--stroke);background:rgba(30,40,66,.65);color:var(--text);cursor:pointer;
   display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;z-index:3;
@@ -145,14 +148,20 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   #maInput{width:56px;font-size:14px}
   #eraSelect{max-width:148px;font-size:12.5px;padding:7px 9px}
 
-  #info{position:relative;order:3;width:auto;margin:0 8px;top:auto;right:auto;
-    max-height:32vh;border-radius:15px 15px 0 0;border-bottom:none;padding:13px 15px 4px}
-  #info h2{font-size:20px;margin:6px 0 2px}
+  /* facts become a draggable bottom sheet, controlled by JS (translateY) */
+  #console{margin-bottom:62px}
+  #info{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;margin:0;z-index:12;
+    height:86vh;max-height:86vh;border-radius:20px 20px 0 0;border-bottom:none;
+    padding:0 17px 14px;display:flex;flex-direction:column;overflow:hidden;touch-action:none;
+    box-shadow:0 -14px 44px rgba(0,0,0,.55);
+    transform:translateY(78vh);transition:transform .32s cubic-bezier(.22,.61,.36,1);will-change:transform}
+  #info h2{font-size:20px;margin:1px 0 2px}
   #info .eyebrow{font-size:11px}
-  #info.collapsed{max-height:none;padding-bottom:13px}
-  #infoToggle{top:10px;right:10px;width:34px;height:34px}
+  #facts{flex:1 1 auto;max-height:none;overflow-y:auto;touch-action:pan-y;padding-bottom:14px}
+  #sheetGrip{display:block}
+  #infoToggle{display:none}
 }
-@media (max-height:560px){ #age{font-size:20px} #info{max-height:26vh} #timeline{height:24px} }
+@media (max-height:560px){ #age{font-size:20px} #timeline{height:24px} }
 
 </style>
 <canvas id="scene"></canvas>
@@ -173,6 +182,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   </div>
 
   <div id="info">
+    <div id="sheetGrip" aria-hidden="true"></div>
     <button id="infoToggle" title="Collapse / expand facts" aria-label="Collapse or expand facts">⌄</button>
     <div class="eyebrow"><span class="dot"></span><span id="eyebrow">Era</span></div>
     <h2 id="eraTitle">—</h2>
@@ -1953,7 +1963,7 @@ function intervalAt(ma){
 
   // ---- DOM ----
   const $ = s => document.querySelector(s);
-  let globe, draggingSlider=false, playing=false, curIv=null;
+  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null;
 
   function loadMesh(){
     if (typeof MESH !== 'undefined') return Promise.resolve(MESH);
@@ -2050,7 +2060,8 @@ function intervalAt(ma){
     // full-globe focus mode: hide all panels for unobstructed interaction
     const app=$('#app');
     function setFocus(on){ app.classList.toggle('focus',on); $('#focusBtn').classList.toggle('active',on);
-      $('#focusBtn').title = on ? 'Show panels' : 'Full-globe mode — hide panels'; }
+      $('#focusBtn').title = on ? 'Show panels' : 'Full-globe mode — hide panels';
+      if(on && sheet && sheet.isMobile()) sheet.peek(); }
     $('#focusBtn').addEventListener('click', ()=> setFocus(!app.classList.contains('focus')));
     $('#restoreBtn').addEventListener('click', ()=> setFocus(false));
     // collapse / expand the facts panel
@@ -2068,6 +2079,55 @@ function intervalAt(ma){
   function stopPlay(){ if(!playing)return; playing=false; setPlayBtn('▶','Play through time'); }
 
   function doResize(){ const w=window.innerWidth,h=window.innerHeight; globe.resize(w,h); }
+
+  // ---- mobile: facts panel as a draggable bottom sheet -----------------------
+  function initMobileSheet(){
+    const info=$('#info');
+    const mq=window.matchMedia('(max-width:820px), (orientation:portrait)');
+    let snaps={full:0,half:0,peek:0}, cur='peek', curY=0;
+    function measure(){
+      const sheetH=info.offsetHeight, h2=info.querySelector('h2');
+      const peekV=Math.min(sheetH, Math.max(52, h2.offsetTop + h2.offsetHeight + 10));
+      const halfV=Math.round(window.innerHeight*0.5);
+      snaps={ full:0, half:Math.max(0,sheetH-halfV), peek:Math.max(0,sheetH-peekV) };
+      $('#console').style.marginBottom = mq.matches ? peekV+'px' : '';
+    }
+    function apply(y,animate){ curY=y;
+      info.style.transition = animate ? 'transform .32s cubic-bezier(.22,.61,.36,1)' : 'none';
+      info.style.transform = 'translateY('+y+'px)'; }
+    function snap(name){ measure(); cur=name; apply(snaps[name],true); info.classList.toggle('sheet-full', name==='full'); }
+    function nearest(y){ let best='peek',bd=1e9; for(const k in snaps){ const d=Math.abs(snaps[k]-y); if(d<bd){bd=d;best=k;} } return best; }
+    let dragging=false, startPY=0, startTY=0, lastPY=0, lastT=0, vy=0, moved=0;
+    function down(e){
+      if(!mq.matches || e.target.closest('#facts')) return;   // drag from header only; facts scrolls
+      measure(); dragging=true; moved=0;
+      startPY=e.clientY; lastPY=e.clientY; lastT=e.timeStamp; startTY=curY; vy=0;
+      info.style.transition='none';
+      try{ info.setPointerCapture(e.pointerId); }catch(_){}
+    }
+    function move(e){
+      if(!dragging) return;
+      const dy=e.clientY-startPY; moved=Math.max(moved,Math.abs(dy));
+      apply(Math.max(0,Math.min(snaps.peek,startTY+dy)),false);
+      const dt=Math.max(1,e.timeStamp-lastT); vy=(e.clientY-lastPY)/dt; lastPY=e.clientY; lastT=e.timeStamp;
+    }
+    function up(){
+      if(!dragging) return; dragging=false;
+      if(moved<6){ snap(cur==='full'?'peek':'full'); return; }   // tap toggles
+      snap(vy>0.5 ? 'peek' : vy<-0.5 ? 'full' : nearest(curY));  // flick or nearest
+    }
+    info.addEventListener('pointerdown',down);
+    info.addEventListener('pointermove',move);
+    info.addEventListener('pointerup',up);
+    info.addEventListener('pointercancel',up);
+    function reset(){
+      if(mq.matches){ measure(); cur='peek'; apply(snaps.peek,false); info.classList.remove('sheet-full'); }
+      else { info.style.transform=''; info.style.transition=''; $('#console').style.marginBottom=''; }
+    }
+    let rt; window.addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(reset,120); });
+    reset();
+    return { isMobile:()=>mq.matches, expand:()=>snap('full'), peek:()=>snap('peek') };
+  }
 
   function loop(prev){
     return function frame(now){
@@ -2091,8 +2151,7 @@ function intervalAt(ma){
       buildTimeline(); buildDropdown(); wire(); doResize();
       // default toggles state
       $('#spinBtn').classList.add('active'); $('#cloudBtn').classList.add('active');
-      // on small screens, start with the facts panel collapsed so the globe is clear
-      if(window.matchMedia('(max-width:820px), (orientation:portrait)').matches) $('#info').classList.add('collapsed');
+      sheet = initMobileSheet();   // facts becomes a draggable bottom sheet on mobile
       globe.setTimeImmediate(0); updateUI(0);
       requestAnimationFrame(loop(0));
       setTimeout(()=>{ $('#loader').classList.add('hide'); },350);

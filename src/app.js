@@ -22,7 +22,7 @@
 
   // ---- DOM ----
   const $ = s => document.querySelector(s);
-  let globe, draggingSlider=false, playing=false, curIv=null;
+  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null;
 
   function loadMesh(){
     if (typeof MESH !== 'undefined') return Promise.resolve(MESH);
@@ -119,7 +119,8 @@
     // full-globe focus mode: hide all panels for unobstructed interaction
     const app=$('#app');
     function setFocus(on){ app.classList.toggle('focus',on); $('#focusBtn').classList.toggle('active',on);
-      $('#focusBtn').title = on ? 'Show panels' : 'Full-globe mode — hide panels'; }
+      $('#focusBtn').title = on ? 'Show panels' : 'Full-globe mode — hide panels';
+      if(on && sheet && sheet.isMobile()) sheet.peek(); }
     $('#focusBtn').addEventListener('click', ()=> setFocus(!app.classList.contains('focus')));
     $('#restoreBtn').addEventListener('click', ()=> setFocus(false));
     // collapse / expand the facts panel
@@ -137,6 +138,55 @@
   function stopPlay(){ if(!playing)return; playing=false; setPlayBtn('▶','Play through time'); }
 
   function doResize(){ const w=window.innerWidth,h=window.innerHeight; globe.resize(w,h); }
+
+  // ---- mobile: facts panel as a draggable bottom sheet -----------------------
+  function initMobileSheet(){
+    const info=$('#info');
+    const mq=window.matchMedia('(max-width:820px), (orientation:portrait)');
+    let snaps={full:0,half:0,peek:0}, cur='peek', curY=0;
+    function measure(){
+      const sheetH=info.offsetHeight, h2=info.querySelector('h2');
+      const peekV=Math.min(sheetH, Math.max(52, h2.offsetTop + h2.offsetHeight + 10));
+      const halfV=Math.round(window.innerHeight*0.5);
+      snaps={ full:0, half:Math.max(0,sheetH-halfV), peek:Math.max(0,sheetH-peekV) };
+      $('#console').style.marginBottom = mq.matches ? peekV+'px' : '';
+    }
+    function apply(y,animate){ curY=y;
+      info.style.transition = animate ? 'transform .32s cubic-bezier(.22,.61,.36,1)' : 'none';
+      info.style.transform = 'translateY('+y+'px)'; }
+    function snap(name){ measure(); cur=name; apply(snaps[name],true); info.classList.toggle('sheet-full', name==='full'); }
+    function nearest(y){ let best='peek',bd=1e9; for(const k in snaps){ const d=Math.abs(snaps[k]-y); if(d<bd){bd=d;best=k;} } return best; }
+    let dragging=false, startPY=0, startTY=0, lastPY=0, lastT=0, vy=0, moved=0;
+    function down(e){
+      if(!mq.matches || e.target.closest('#facts')) return;   // drag from header only; facts scrolls
+      measure(); dragging=true; moved=0;
+      startPY=e.clientY; lastPY=e.clientY; lastT=e.timeStamp; startTY=curY; vy=0;
+      info.style.transition='none';
+      try{ info.setPointerCapture(e.pointerId); }catch(_){}
+    }
+    function move(e){
+      if(!dragging) return;
+      const dy=e.clientY-startPY; moved=Math.max(moved,Math.abs(dy));
+      apply(Math.max(0,Math.min(snaps.peek,startTY+dy)),false);
+      const dt=Math.max(1,e.timeStamp-lastT); vy=(e.clientY-lastPY)/dt; lastPY=e.clientY; lastT=e.timeStamp;
+    }
+    function up(){
+      if(!dragging) return; dragging=false;
+      if(moved<6){ snap(cur==='full'?'peek':'full'); return; }   // tap toggles
+      snap(vy>0.5 ? 'peek' : vy<-0.5 ? 'full' : nearest(curY));  // flick or nearest
+    }
+    info.addEventListener('pointerdown',down);
+    info.addEventListener('pointermove',move);
+    info.addEventListener('pointerup',up);
+    info.addEventListener('pointercancel',up);
+    function reset(){
+      if(mq.matches){ measure(); cur='peek'; apply(snaps.peek,false); info.classList.remove('sheet-full'); }
+      else { info.style.transform=''; info.style.transition=''; $('#console').style.marginBottom=''; }
+    }
+    let rt; window.addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(reset,120); });
+    reset();
+    return { isMobile:()=>mq.matches, expand:()=>snap('full'), peek:()=>snap('peek') };
+  }
 
   function loop(prev){
     return function frame(now){
@@ -160,8 +210,7 @@
       buildTimeline(); buildDropdown(); wire(); doResize();
       // default toggles state
       $('#spinBtn').classList.add('active'); $('#cloudBtn').classList.add('active');
-      // on small screens, start with the facts panel collapsed so the globe is clear
-      if(window.matchMedia('(max-width:820px), (orientation:portrait)').matches) $('#info').classList.add('collapsed');
+      sheet = initMobileSheet();   // facts becomes a draggable bottom sheet on mobile
       globe.setTimeImmediate(0); updateUI(0);
       requestAnimationFrame(loop(0));
       setTimeout(()=>{ $('#loader').classList.add('hide'); },350);
