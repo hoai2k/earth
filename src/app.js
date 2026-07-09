@@ -131,9 +131,10 @@
   // ---- playback: sweep from present back through time -----------------------
   let playFrac=0, playDir=1;
   function togglePlay(){ playing?stopPlay():startPlay(); }
-  function startPlay(){ playing=true; $('#playBtn').innerHTML='<span class="ic">❚❚</span> Pause';
+  function setPlayBtn(ic,label){ const b=$('#playBtn'); b.querySelector('.ic').textContent=ic; b.querySelector('.lbl').textContent=' '+label; }
+  function startPlay(){ playing=true; setPlayBtn('❚❚','Pause');
     playFrac=maToFrac(globe.getDisplayMa()); if(playFrac>=0.999){playFrac=0; playDir=1;} }
-  function stopPlay(){ if(!playing)return; playing=false; $('#playBtn').innerHTML='<span class="ic">▶</span> Play through time'; }
+  function stopPlay(){ if(!playing)return; playing=false; setPlayBtn('▶','Play through time'); }
 
   function doResize(){ const w=window.innerWidth,h=window.innerHeight; globe.resize(w,h); }
 
@@ -159,6 +160,8 @@
       buildTimeline(); buildDropdown(); wire(); doResize();
       // default toggles state
       $('#spinBtn').classList.add('active'); $('#cloudBtn').classList.add('active');
+      // on small screens, start with the facts panel collapsed so the globe is clear
+      if(window.matchMedia('(max-width:820px), (orientation:portrait)').matches) $('#info').classList.add('collapsed');
       globe.setTimeImmediate(0); updateUI(0);
       requestAnimationFrame(loop(0));
       setTimeout(()=>{ $('#loader').classList.add('hide'); },350);

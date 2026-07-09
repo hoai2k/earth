@@ -122,24 +122,37 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 
 /* ---- responsive: mobile portrait ---- */
 @media (max-width:820px), (orientation:portrait){
-  #info{position:relative;width:auto;margin:0 12px;top:auto;right:auto;max-height:38vh;order:3;
-    border-radius:16px 16px 0 0;border-bottom:none}
-  #app{justify-content:flex-start}
-  #topbar{padding:12px 14px}
+  #app{flex-direction:column;justify-content:flex-start}
+  #topbar{padding:10px 12px}
   .brand h1{font-size:15px}.brand .sub{font-size:10px}
-  #console{order:2;padding:10px 12px 8px;background:none}
-  #age{font-size:27px}
-  #info h2{font-size:22px}
-  #info{margin-top:auto}
-  #controls{gap:7px}
-  #eraSelect{max-width:150px;font-size:12.5px}
-  .field{padding:6px 9px}
+  .iconbtn{width:36px;height:36px;font-size:15px}
+  #topActions{gap:7px}
+
+  /* pin the time console + facts panel to the bottom, kept compact so the
+     globe owns the upper ~three-quarters of the screen */
+  #console{order:2;margin-top:auto;padding:6px 12px 6px;
+    background:linear-gradient(to top,rgba(3,5,12,.82) 55%,rgba(3,5,12,0))}
+  #readout{margin-bottom:5px;gap:8px}
+  #age{font-size:22px}
+  #age .unit{font-size:13px}
+  #eraName{font-size:12.5px}
+  #timeline{height:26px;margin:2px 0}
+  #strip .seg span{font-size:7.5px;bottom:2px}
+  #controls{gap:6px;margin-top:7px}
+  #playBtn{padding:8px 11px;font-size:13px}
+  #playBtn .lbl{display:none}
+  .field{padding:5px 9px}
+  #maInput{width:56px;font-size:14px}
+  #eraSelect{max-width:148px;font-size:12.5px;padding:7px 9px}
+
+  #info{position:relative;order:3;width:auto;margin:0 8px;top:auto;right:auto;
+    max-height:32vh;border-radius:15px 15px 0 0;border-bottom:none;padding:13px 15px 4px}
+  #info h2{font-size:20px;margin:6px 0 2px}
+  #info .eyebrow{font-size:11px}
+  #info.collapsed{max-height:none;padding-bottom:13px}
+  #infoToggle{top:10px;right:10px;width:34px;height:34px}
 }
-@media (max-width:820px) and (orientation:portrait){
-  #app{display:flex;flex-direction:column}
-  #console{margin-top:auto}
-}
-@media (max-height:520px){ #info{max-height:calc(100% - 150px)} #age{font-size:26px} }
+@media (max-height:560px){ #age{font-size:20px} #info{max-height:26vh} #timeline{height:24px} }
 
 </style>
 <canvas id="scene"></canvas>
@@ -182,7 +195,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
         <input type="range" id="slider" min="0" max="1000" value="0" step="1" aria-label="Geological time">
       </div>
       <div id="controls">
-        <button id="playBtn"><span class="ic">▶</span> Play through time</button>
+        <button id="playBtn"><span class="ic">▶</span><span class="lbl"> Play through time</span></button>
         <div class="field"><label for="maInput">Age</label><input type="number" id="maInput" min="0" max="4540" step="1" value="0"><span style="font-size:12px;color:var(--muted)">Ma</span></div>
         <select id="eraSelect" aria-label="Geological period"></select>
       </div>
@@ -2049,9 +2062,10 @@ function intervalAt(ma){
   // ---- playback: sweep from present back through time -----------------------
   let playFrac=0, playDir=1;
   function togglePlay(){ playing?stopPlay():startPlay(); }
-  function startPlay(){ playing=true; $('#playBtn').innerHTML='<span class="ic">❚❚</span> Pause';
+  function setPlayBtn(ic,label){ const b=$('#playBtn'); b.querySelector('.ic').textContent=ic; b.querySelector('.lbl').textContent=' '+label; }
+  function startPlay(){ playing=true; setPlayBtn('❚❚','Pause');
     playFrac=maToFrac(globe.getDisplayMa()); if(playFrac>=0.999){playFrac=0; playDir=1;} }
-  function stopPlay(){ if(!playing)return; playing=false; $('#playBtn').innerHTML='<span class="ic">▶</span> Play through time'; }
+  function stopPlay(){ if(!playing)return; playing=false; setPlayBtn('▶','Play through time'); }
 
   function doResize(){ const w=window.innerWidth,h=window.innerHeight; globe.resize(w,h); }
 
@@ -2077,6 +2091,8 @@ function intervalAt(ma){
       buildTimeline(); buildDropdown(); wire(); doResize();
       // default toggles state
       $('#spinBtn').classList.add('active'); $('#cloudBtn').classList.add('active');
+      // on small screens, start with the facts panel collapsed so the globe is clear
+      if(window.matchMedia('(max-width:820px), (orientation:portrait)').matches) $('#info').classList.add('collapsed');
       globe.setTimeImmediate(0); updateUI(0);
       requestAnimationFrame(loop(0));
       setTimeout(()=>{ $('#loader').classList.add('hide'); },350);
