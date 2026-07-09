@@ -22,7 +22,7 @@
 
   // ---- DOM ----
   const $ = s => document.querySelector(s);
-  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null;
+  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null, curMa=0;
 
   function loadMesh(){
     if (typeof MESH !== 'undefined') return Promise.resolve(MESH);
@@ -31,8 +31,8 @@
 
   function buildTimeline(){
     const strip = $('#strip');
-    // present (0 Ma) on the left, deep past on the right
-    const ordered = INTERVALS.slice().sort((a,b)=>a.end-b.end);
+    // deep past on the left, present (0 Ma) on the right
+    const ordered = INTERVALS.slice().sort((a,b)=>b.end-a.end);
     for(const iv of ordered){
       const wl = maToFrac(iv.end), wr = maToFrac(iv.start);
       const seg = document.createElement('div');
@@ -85,11 +85,11 @@
       const note=$('#note');
       note.style.display = ma>1000 ? 'block' : 'none';
     }
-    // playhead + strip highlight
-    const fr=maToFrac(ma);
-    $('#playhead').style.left = (fr*100)+'%';
+    // current-time handle (present day on the right) + strip highlight
+    curMa = ma;
+    const pos = 1 - maToFrac(ma);
+    const h=$('#handle'); h.style.left = (pos*100)+'%'; h.setAttribute('aria-valuenow', Math.round(ma));
     for(const seg of $('#strip').children) seg.classList.toggle('on', seg.dataset.id===iv.id);
-    if(!opts.fromSlider && !draggingSlider) $('#slider').value = Math.round(fr*1000);
     if(!opts.fromInput && document.activeElement!==$('#maInput'))
       $('#maInput').value = ma<10 ? +ma.toFixed(1) : Math.round(ma);
   }
@@ -102,11 +102,27 @@
   function setTime(ma, opts){ ma=Math.max(0,Math.min(4540,ma)); globe.setTime(ma); updateUI(ma,opts); }
 
   function wire(){
-    const slider=$('#slider');
-    slider.addEventListener('input', ()=>{ draggingSlider=true; const ma=fracToMa(slider.value/1000); stopPlay(); setTime(ma,{fromSlider:true}); });
-    slider.addEventListener('change', ()=>{ draggingSlider=false; });
-    slider.addEventListener('pointerup', ()=>{ draggingSlider=false; });
-    slider.addEventListener('pointerdown', ()=>{ draggingSlider=true; });
+    const timeline=$('#timeline'), handle=$('#handle');
+    function posToMa(clientX){ const r=timeline.getBoundingClientRect(); let p=(clientX-r.left)/r.width; p=Math.max(0,Math.min(1,p)); return fracToMa(1-p); }
+    function tlDown(e){ draggingSlider=true; handle.classList.add('drag'); stopPlay();
+      try{ timeline.setPointerCapture(e.pointerId); }catch(_){}
+      setTime(posToMa(e.clientX),{fromSlider:true}); e.preventDefault(); }
+    function tlMove(e){ if(!draggingSlider) return; setTime(posToMa(e.clientX),{fromSlider:true}); }
+    function tlUp(){ if(!draggingSlider) return; draggingSlider=false; handle.classList.remove('drag'); }
+    timeline.addEventListener('pointerdown', tlDown);
+    timeline.addEventListener('pointermove', tlMove);
+    timeline.addEventListener('pointerup', tlUp);
+    timeline.addEventListener('pointercancel', tlUp);
+    handle.addEventListener('keydown', e=>{
+      let p = 1 - maToFrac(curMa); const s=0.01, big=0.06;
+      if(e.key==='ArrowRight'||e.key==='ArrowUp') p+=s;
+      else if(e.key==='ArrowLeft'||e.key==='ArrowDown') p-=s;
+      else if(e.key==='PageUp') p+=big;
+      else if(e.key==='PageDown') p-=big;
+      else if(e.key==='End') p=1; else if(e.key==='Home') p=0;
+      else return;
+      e.preventDefault(); p=Math.max(0,Math.min(1,p)); stopPlay(); setTime(fracToMa(1-p));
+    });
 
     $('#maInput').addEventListener('input', ()=>{ const v=parseFloat($('#maInput').value); if(!isNaN(v)){ stopPlay(); setTime(v,{fromInput:true}); } });
     $('#eraSelect').addEventListener('change', ()=>{ const iv=INTERVALS.find(i=>i.id===$('#eraSelect').value); if(iv){ stopPlay(); setTime(midOf(iv)); } });

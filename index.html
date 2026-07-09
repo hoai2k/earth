@@ -66,19 +66,23 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 #eraName b{color:#fff;font-weight:680}
 
 /* timeline strip + slider */
-#timeline{position:relative;height:34px;margin:4px 0 2px;border-radius:9px;overflow:hidden;
-  border:1px solid var(--stroke);cursor:pointer}
-#strip{position:absolute;inset:0;display:flex}
-#strip .seg{height:100%;position:relative;opacity:.62;transition:opacity .2s}
+#timeline{position:relative;height:34px;margin:5px 0 3px;cursor:pointer;touch-action:none}
+#strip{position:absolute;inset:0;display:flex;border-radius:9px;overflow:hidden;border:1px solid var(--stroke)}
+#strip .seg{height:100%;position:relative;opacity:.55;transition:opacity .2s}
 #strip .seg.on{opacity:1}
 #strip .seg span{position:absolute;left:0;right:0;bottom:3px;text-align:center;font-size:8.5px;
   color:rgba(255,255,255,.82);text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap;overflow:hidden;
   text-transform:uppercase;letter-spacing:.3px;pointer-events:none}
-#playhead{position:absolute;top:-3px;bottom:-3px;width:3px;background:#fff;border-radius:2px;
-  box-shadow:0 0 8px rgba(255,255,255,.9),0 0 3px #fff;transform:translateX(-50%);pointer-events:none;z-index:3}
-#slider{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;-webkit-appearance:none;appearance:none}
-#slider::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:34px;cursor:grab}
-#slider::-moz-range-thumb{width:26px;height:34px;border:0;background:transparent;cursor:grab}
+/* grabbable current-time handle */
+#handle{position:absolute;top:50%;left:0;transform:translate(-50%,-50%);width:15px;height:calc(100% + 15px);
+  border-radius:8px;background:linear-gradient(180deg,#ffffff,#dbe4ff);border:2px solid var(--accent);
+  box-shadow:0 2px 9px rgba(0,0,0,.55),0 0 12px var(--accent);cursor:grab;z-index:4;touch-action:none;
+  transition:left .05s linear}
+#handle:active{cursor:grabbing}
+#handle.drag{transition:none}
+#handle:focus{outline:none;box-shadow:0 2px 9px rgba(0,0,0,.55),0 0 0 3px rgba(130,165,255,.55)}
+#handle .grip{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:13px;
+  background:rgba(70,90,150,.55);border-radius:1px;box-shadow:3px 0 0 rgba(70,90,150,.35),-3px 0 0 rgba(70,90,150,.35)}
 
 #controls{display:flex;align-items:center;gap:10px;margin-top:12px;justify-content:center;flex-wrap:wrap}
 .field{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--stroke);
@@ -208,8 +212,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
       </div>
       <div id="timeline">
         <div id="strip"></div>
-        <div id="playhead"></div>
-        <input type="range" id="slider" min="0" max="1000" value="0" step="1" aria-label="Geological time">
+        <div id="handle" tabindex="0" role="slider" aria-label="Geological time (drag; right = present day)"
+             aria-valuemin="0" aria-valuemax="4540" aria-valuenow="0"><span class="grip"></span></div>
       </div>
       <div id="controls">
         <button id="playBtn"><span class="ic">▶</span><span class="lbl"> Play through time</span></button>
@@ -1971,7 +1975,7 @@ function intervalAt(ma){
 
   // ---- DOM ----
   const $ = s => document.querySelector(s);
-  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null;
+  let globe, draggingSlider=false, playing=false, curIv=null, sheet=null, curMa=0;
 
   function loadMesh(){
     if (typeof MESH !== 'undefined') return Promise.resolve(MESH);
@@ -1980,8 +1984,8 @@ function intervalAt(ma){
 
   function buildTimeline(){
     const strip = $('#strip');
-    // present (0 Ma) on the left, deep past on the right
-    const ordered = INTERVALS.slice().sort((a,b)=>a.end-b.end);
+    // deep past on the left, present (0 Ma) on the right
+    const ordered = INTERVALS.slice().sort((a,b)=>b.end-a.end);
     for(const iv of ordered){
       const wl = maToFrac(iv.end), wr = maToFrac(iv.start);
       const seg = document.createElement('div');
@@ -2034,11 +2038,11 @@ function intervalAt(ma){
       const note=$('#note');
       note.style.display = ma>1000 ? 'block' : 'none';
     }
-    // playhead + strip highlight
-    const fr=maToFrac(ma);
-    $('#playhead').style.left = (fr*100)+'%';
+    // current-time handle (present day on the right) + strip highlight
+    curMa = ma;
+    const pos = 1 - maToFrac(ma);
+    const h=$('#handle'); h.style.left = (pos*100)+'%'; h.setAttribute('aria-valuenow', Math.round(ma));
     for(const seg of $('#strip').children) seg.classList.toggle('on', seg.dataset.id===iv.id);
-    if(!opts.fromSlider && !draggingSlider) $('#slider').value = Math.round(fr*1000);
     if(!opts.fromInput && document.activeElement!==$('#maInput'))
       $('#maInput').value = ma<10 ? +ma.toFixed(1) : Math.round(ma);
   }
@@ -2051,11 +2055,27 @@ function intervalAt(ma){
   function setTime(ma, opts){ ma=Math.max(0,Math.min(4540,ma)); globe.setTime(ma); updateUI(ma,opts); }
 
   function wire(){
-    const slider=$('#slider');
-    slider.addEventListener('input', ()=>{ draggingSlider=true; const ma=fracToMa(slider.value/1000); stopPlay(); setTime(ma,{fromSlider:true}); });
-    slider.addEventListener('change', ()=>{ draggingSlider=false; });
-    slider.addEventListener('pointerup', ()=>{ draggingSlider=false; });
-    slider.addEventListener('pointerdown', ()=>{ draggingSlider=true; });
+    const timeline=$('#timeline'), handle=$('#handle');
+    function posToMa(clientX){ const r=timeline.getBoundingClientRect(); let p=(clientX-r.left)/r.width; p=Math.max(0,Math.min(1,p)); return fracToMa(1-p); }
+    function tlDown(e){ draggingSlider=true; handle.classList.add('drag'); stopPlay();
+      try{ timeline.setPointerCapture(e.pointerId); }catch(_){}
+      setTime(posToMa(e.clientX),{fromSlider:true}); e.preventDefault(); }
+    function tlMove(e){ if(!draggingSlider) return; setTime(posToMa(e.clientX),{fromSlider:true}); }
+    function tlUp(){ if(!draggingSlider) return; draggingSlider=false; handle.classList.remove('drag'); }
+    timeline.addEventListener('pointerdown', tlDown);
+    timeline.addEventListener('pointermove', tlMove);
+    timeline.addEventListener('pointerup', tlUp);
+    timeline.addEventListener('pointercancel', tlUp);
+    handle.addEventListener('keydown', e=>{
+      let p = 1 - maToFrac(curMa); const s=0.01, big=0.06;
+      if(e.key==='ArrowRight'||e.key==='ArrowUp') p+=s;
+      else if(e.key==='ArrowLeft'||e.key==='ArrowDown') p-=s;
+      else if(e.key==='PageUp') p+=big;
+      else if(e.key==='PageDown') p-=big;
+      else if(e.key==='End') p=1; else if(e.key==='Home') p=0;
+      else return;
+      e.preventDefault(); p=Math.max(0,Math.min(1,p)); stopPlay(); setTime(fracToMa(1-p));
+    });
 
     $('#maInput').addEventListener('input', ()=>{ const v=parseFloat($('#maInput').value); if(!isNaN(v)){ stopPlay(); setTime(v,{fromInput:true}); } });
     $('#eraSelect').addEventListener('change', ()=>{ const iv=INTERVALS.find(i=>i.id===$('#eraSelect').value); if(iv){ stopPlay(); setTime(midOf(iv)); } });
