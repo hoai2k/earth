@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Chrono·Earth — 3D Deep Time Globe</title>
+<link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hint">Drag to rotate · scroll or pinch to zoom</div>
+
+<div id="app">
+  <div id="topbar">
+    <div class="brand">
+      <div class="mark"></div>
+      <div><h1>Chrono·Earth</h1><div class="sub">A journey through deep time</div></div>
+    </div>
+    <div id="topActions">
+      <button class="iconbtn" id="spinBtn" title="Auto-rotate">↻</button>
+      <button class="iconbtn" id="cloudBtn" title="Clouds">☁</button>
+      <button class="iconbtn" id="resetBtn" title="Reset view">⊙</button>
+    </div>
+  </div>
+
+  <div id="info">
+    <div class="eyebrow"><span class="dot"></span><span id="eyebrow">Era</span></div>
+    <h2 id="eraTitle">—</h2>
+    <div class="range" id="eraRange"></div>
+    <div class="tagline" id="tagline"></div>
+    <div id="note" style="display:none;font-size:12px;color:var(--muted2);margin:2px 0 6px">
+      Continental positions before ~1 Ga are largely unknown — the globe shows early Earth’s changing surface.</div>
+    <ul id="facts"></ul>
+  </div>
+
+  <div id="console">
+    <div class="wrap">
+      <div id="readout">
+        <div id="age">0<span class="unit">today</span></div>
+        <div id="eraName"></div>
+      </div>
+      <div id="timeline">
+        <div id="strip"></div>
+        <div id="playhead"></div>
+        <input type="range" id="slider" min="0" max="1000" value="0" step="1" aria-label="Geological time">
+      </div>
+      <div id="controls">
+        <button id="playBtn"><span class="ic">▶</span> Play through time</button>
+        <div class="field"><label for="maInput">Age</label><input type="number" id="maInput" min="0" max="4540" step="1" value="0"><span style="font-size:12px;color:var(--muted)">Ma</span></div>
+        <select id="eraSelect" aria-label="Geological period"></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="loader"><div class="spin"></div><p>Assembling the Earth…</p></div>
+
+<script src="./vendor/three.min.js"></script>
+<script src="./vendor/OrbitControls.js"></script>
+<script src="./src/data.js"></script>
+<script src="./src/recon.js"></script>
+<script src="./src/globe.js"></script>
+<script src="./src/app.js"></script>
+</body>
+</html>

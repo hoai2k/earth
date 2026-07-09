@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#0a1020;color:#ccc;font-family:monospace}
+canvas{display:block;background:#0a2036}
+#t{position:fixed;top:6px;left:8px;font-size:16px}
+</style></head><body>
+<canvas id="c" width="1440" height="720"></canvas>
+<div id="t"></div>
+<script src="../src/recon.js"></script>
+<script>
+const PCOL={NAM:'#e4572e',GRN:'#f2b134',SAM:'#4cd137',AFR:'#f5a623',ARB:'#e056fd',IND:'#00a8ff',EUR:'#c23616',SIB:'#7f8fa6',CHN:'#e84393',AUS:'#44bd32',ANT:'#dcdde1'};
+function qrot(q,v){const[x,y,z,w]=q;
+  const ix= w*v[0]+y*v[2]-z*v[1], iy= w*v[1]+z*v[0]-x*v[2], iz= w*v[2]+x*v[1]-y*v[0], iw=-x*v[0]-y*v[1]-z*v[2];
+  return [ix*w+iw*-x+iy*-z-iz*-y, iy*w+iw*-y+iz*-x-ix*-z, iz*w+iw*-z+ix*-y-iy*-x];}
+const params=new URLSearchParams(location.search);
+const T=parseFloat(params.get('t')||'0');
+const cv=document.getElementById('c'),cx=cv.getContext('2d');
+const W=cv.width,H=cv.height;
+function proj(lon,lat){return [(lon+180)/360*W, (90-lat)/180*H];}
+fetch('../data/plates-mesh.json').then(r=>r.json()).then(mesh=>{
+  document.getElementById('t').textContent=T+' Ma';
+  // graticule
+  cx.strokeStyle='rgba(255,255,255,0.08)'; cx.lineWidth=1;
+  for(let lat=-60;lat<=60;lat+=30){const y=proj(0,lat)[1];cx.beginPath();cx.moveTo(0,y);cx.lineTo(W,y);cx.stroke();}
+  cx.strokeStyle='rgba(255,255,255,0.18)'; const ye=proj(0,0)[1];cx.beginPath();cx.moveTo(0,ye);cx.lineTo(W,ye);cx.stroke();
+  for(const id of Object.keys(mesh.plates)){
+    const p=mesh.plates[id],v=p.verts,idx=p.idx,q=RECON.quatAt(id,Math.min(T,1000));
+    // precompute paleo lon/lat per vertex
+    const n=v.length/2, pll=new Float64Array(n*2);
+    for(let i=0;i<n;i++){const s=RECON.sph(v[i*2],v[i*2+1]);const r=qrot(q,s);const ll=RECON.vecToLL(r);pll[i*2]=ll[0];pll[i*2+1]=ll[1];}
+    cx.fillStyle=PCOL[id]||'#888'; cx.globalAlpha=0.55;
+    for(let t=0;t<idx.length;t+=3){
+      const a=idx[t],b=idx[t+1],c=idx[t+2];
+      const lo=[pll[a*2],pll[b*2],pll[c*2]], la=[pll[a*2+1],pll[b*2+1],pll[c*2+1]];
+      const mn=Math.min(...lo),mx=Math.max(...lo); if(mx-mn>180) continue; // dateline
+      const A=proj(lo[0],la[0]),B=proj(lo[1],la[1]),C=proj(lo[2],la[2]);
+      cx.beginPath();cx.moveTo(A[0],A[1]);cx.lineTo(B[0],B[1]);cx.lineTo(C[0],C[1]);cx.closePath();cx.fill();
+    }
+    // label at anchor paleo pos
+    const all=RECON.anchorLLAt(id,Math.min(T,1000)); const lp=proj(all[0],all[1]);
+    cx.globalAlpha=1; cx.fillStyle='#fff'; cx.font='bold 15px monospace';
+    cx.strokeStyle='rgba(0,0,0,0.8)';cx.lineWidth=3;cx.strokeText(id,lp[0]-10,lp[1]);cx.fillText(id,lp[0]-10,lp[1]);
+  }
+  window.__done=true;
+});
+</script></body></html>

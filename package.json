@@ -1,0 +1,24 @@
+{
+  "name": "earth",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:41729/git/hoai2k/earth"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@turf/bbox-clip": "^6.5.0",
+    "@turf/helpers": "^6.5.0",
+    "@turf/simplify": "^6.5.0",
+    "earcut": "^2.2.4",
+    "playwright": "1.48",
+    "three": "^0.128.0"
+  }
+}
