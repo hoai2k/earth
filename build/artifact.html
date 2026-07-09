@@ -1749,8 +1749,16 @@ function intervalAt(ma){
         col=mix(col,vec3(0.42,0.37,0.32),mount*0.55);
         float snow=smoothstep(0.80,0.93,e)*(0.35+al/70.0);
         col=mix(col,ice,clamp(snow,0.0,1.0));
+        // terrain relief: gently perturb normal by the elevation gradient (Mikkelsen)
+        float H=(e-0.5)+(e2-0.5)*0.25;
+        vec3 dpx=dFdx(vWP), dpy=dFdy(vWP);
+        float dHx=dFdx(H), dHy=dFdy(H);
+        vec3 r1=cross(dpy,N), r2=cross(N,dpx);
+        float det=dot(dpx,r1);
+        vec3 sg=sign(det)*(dHx*r1+dHy*r2);
+        N=normalize(abs(det)*N - 4.0*sg);
         float dif=clamp(dot(N,L),0.0,1.0);
-        vec3 lit=col*(0.16+0.98*dif);
+        vec3 lit=col*(0.24+0.9*dif);
         // subtle terminator warm tint
         lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L)),0.0,1.0),3.0)*dif;
         gl_FragColor=vec4(lit,uFade);
@@ -1775,7 +1783,7 @@ function intervalAt(ma){
       g.setIndex(p.idx);
       const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
         uniforms: contUniforms, vertexShader: contVert, fragmentShader: contFrag,
-        transparent: true, side: THREE.DoubleSide,
+        transparent: true, side: THREE.DoubleSide, extensions: { derivatives: true },
       }));
       m.renderOrder = 1;
       m.material.depthWrite = true;
