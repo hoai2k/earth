@@ -1779,12 +1779,23 @@ function intervalAt(ma){
     }
     controls.enableRotate = false;   // rotation handled below; OrbitControls only zooms
     let orbitDrag = false;
-    function spinEarth(dx, dy) {   // grabbed surface follows the cursor
+    // Turntable rotation: unlimited yaw (spin about the polar axis, with momentum)
+    // + pitch clamped to [-90,90] (tilt toward a pole; no momentum, never rolls).
+    // earth.quaternion = pitch(about screen-X) * yaw(about world-Y).
+    const X_AXIS = new THREE.Vector3(1, 0, 0);
+    let yaw = 0, pitch = 0, yawVel = 0;
+    const PITCH_LIM = Math.PI / 2;
+    function applyOrientation() {
+      _qx.setFromAxisAngle(X_AXIS, pitch);
+      _qy.setFromAxisAngle(UP, yaw);
+      earth.quaternion.copy(_qx).multiply(_qy);
+    }
+    function dragSpin(dx, dy) {   // grabbed surface follows the cursor
       const sp = 0.006;
-      _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-      _qy.setFromAxisAngle(UP, dx * sp);
-      _qx.setFromAxisAngle(_right, dy * sp);
-      earth.quaternion.premultiply(_qx).premultiply(_qy);
+      yaw += dx * sp;
+      pitch = Math.max(-PITCH_LIM, Math.min(PITCH_LIM, pitch + dy * sp));
+      yawVel = dx * sp;           // momentum on the spin only, not the tilt
+      applyOrientation();
     }
     function orbitCamera(dx, dy) {   // rotate viewpoint around the globe (sun stays fixed)
       const sp = 0.005;
@@ -1813,7 +1824,7 @@ function intervalAt(ma){
       if (pointers !== 1) return;
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
-      if (earthDrag) { velX = dx; velY = dy; spinEarth(dx, dy); }
+      if (earthDrag) dragSpin(dx, dy);
       else if (orbitDrag) orbitCamera(dx, dy);
     });
     function endDrag() {
@@ -2070,8 +2081,9 @@ function intervalAt(ma){
       return out.copy(_acc).normalize();
     }
     let followEnabled = true;
-    const prevC = new THREE.Vector3(0, 0, 1), curC = new THREE.Vector3(), _dq = new THREE.Quaternion();
+    const prevC = new THREE.Vector3(0, 0, 1), curC = new THREE.Vector3();
     landCentroid(prevC);
+    let prevAz = Math.atan2(prevC.z, prevC.x);
 
     const _m4 = new THREE.Matrix4(), _spin = new THREE.Quaternion();
     let clock = 0;
@@ -2085,21 +2097,20 @@ function intervalAt(ma){
         applyRecon(displayMa);
         if (onTimeAnim) onTimeAnim(displayMa);
       }
-      // keep continents in view: spin the Earth by the land-centroid's motion so
-      // the world-space centroid stays put (empty ocean rotates to the back)
+      // keep continents in view: track the land centroid's longitude drift with
+      // yaw (turntable-safe; the empty ocean rotates to the back). Pitch is left
+      // to the user so the view never tilts on its own.
       landCentroid(curC);
-      if (followEnabled && animating && !earthDrag) {
-        _dq.setFromUnitVectors(curC, prevC);
-        earth.quaternion.multiply(_dq);
-      }
-      prevC.copy(curC);
-      // release momentum after a globe drag
-      if (!earthDrag && (Math.abs(velX) > 0.05 || Math.abs(velY) > 0.05)) {
-        spinEarth(velX, velY); velX *= 0.92; velY *= 0.92;
-      }
-      // gentle idle auto-spin of the Earth (paused while interacting or animating)
-      if (spinEnabled && !userActive && !earthDrag && !animating) {
-        _spin.setFromAxisAngle(UP, dt * 0.045); earth.quaternion.premultiply(_spin);
+      const az = Math.atan2(curC.z, curC.x);
+      let dAz = az - prevAz; if (dAz > Math.PI) dAz -= 2*Math.PI; else if (dAz < -Math.PI) dAz += 2*Math.PI;
+      prevAz = az;
+      if (!earthDrag) {
+        if (followEnabled && animating) yaw += dAz;
+        // momentum on the spin (yaw only)
+        if (Math.abs(yawVel) > 0.0002) { yaw += yawVel; yawVel *= 0.94; } else yawVel = 0;
+        // gentle idle auto-spin (paused while interacting or animating)
+        if (spinEnabled && !userActive && !animating) yaw += dt * 0.045;
+        applyOrientation();
       }
       // view-inverse so shaders read paleo-latitude, not the viewing spin
       _m4.makeRotationFromQuaternion(earth.quaternion).invert();
@@ -2109,14 +2120,23 @@ function intervalAt(ma){
       renderer.render(scene, camera);
     }
 
+    // Point the turntable so a given local direction faces the (fixed) camera.
+    function faceDir(dir) {
+      const d = dir.clone().normalize(), F = camera.position.clone().normalize();
+      yaw = Math.atan2(-d.x, d.z);
+      let dp = d.clone().applyAxisAngle(UP, yaw);
+      if (dp.z < 0) { yaw += Math.PI; dp = d.clone().applyAxisAngle(UP, yaw); }
+      pitch = Math.atan2(F.z, F.y) - Math.atan2(dp.z, dp.y);
+      pitch = Math.max(-PITCH_LIM, Math.min(PITCH_LIM, pitch));
+      yawVel = 0; applyOrientation();
+      landCentroid(prevC); prevAz = Math.atan2(prevC.z, prevC.x);
+    }
+
     let onTimeAnim = null;
     applyRecon(0);
     // open facing Africa/Europe (recognisable + well lit) rather than a pole
-    (function () {
-      const d = RECON.sph(24, 18), F = camera.position.clone().normalize();
-      earth.quaternion.setFromUnitVectors(new THREE.Vector3(d[0], d[1], d[2]).normalize(), F);
-      landCentroid(prevC);
-    })();
+    const HOME = RECON.sph(24, 18);
+    faceDir(new THREE.Vector3(HOME[0], HOME[1], HOME[2]));
 
     return {
       scene, camera, renderer, controls, frame,
@@ -2128,10 +2148,11 @@ function intervalAt(ma){
       setFollow(on){ followEnabled = on; },
       onTimeAnim(fn){ onTimeAnim = fn; },
       resize(w, h){ camera.aspect = w/h; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2)); renderer.setSize(w,h,false); },
-      resetView(){ controls.reset(); camera.position.set(0,0.75,2.85); earth.quaternion.identity(); velX=velY=0; },
+      resetView(){ controls.reset(); camera.position.set(0,0.75,2.85); faceDir(new THREE.Vector3(HOME[0], HOME[1], HOME[2])); },
       // debug/testing helpers
       _earth: earth,
-      _face(dir){ const F = camera.position.clone().normalize(); earth.quaternion.setFromUnitVectors(dir.clone().normalize(), F); },
+      _state(){ return { yaw, pitch, yawVel }; },
+      _face(dir){ faceDir(dir); },
       _centroid(){ const o = new THREE.Vector3(); landCentroid(o); return o; },
     };
   }
