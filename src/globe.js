@@ -70,6 +70,37 @@
     const s = new THREE.Sprite(mat); s.scale.set(14,14,1); return s;
   }
 
+  // Per-era glaciation: [ageMa, iceEdgeLatitude(deg; 90 = ice-free), snowball(0..1)].
+  // Ice appears poleward of iceEdge (in |latitude|); snowball adds a global freeze.
+  // Values from published paleoclimate / glaciation extents (Torsvik, Scotese,
+  // Snowball-Earth & Late-Paleozoic-Ice-Age literature).
+  // [ageMa, iceEdgeLat, snowball, hemiBias]. hemiBias: +south-dominated / -north /
+  // 0 bipolar — the non-dominant hemisphere's ice edge is pushed poleward.
+  const CLIMATE = [
+    [0,62,0,0.2],[0.02,40,0,-0.2],[1,45,0,-0.1],[2.7,50,0,-0.1],[5,60,0,0.4],[12,66,0,0.5],[15,69,0,0.5],
+    [25,64,0,0.5],[33.9,63,0,0.6],[40,84,0,0.4],[50,89,0,0],[56,90,0,0],[66,88,0,0],[100,90,0,0],
+    [145,88,0,0],[200,88,0,0],[250,78,0,0.5],[255,60,0,0.9],[275,36,0,1],[300,30,0,1],[320,31,0,1],
+    [335,34,0,1],[350,46,0,0.8],[360,56,0,0.6],[375,72,0,0.5],[400,86,0,0],[419,85,0,0],[430,84,0,0],
+    [443,58,0,0.7],[444.3,40,0,1],[445.2,46,0,1],[450,66,0,0.6],[470,84,0,0.3],[500,88,0,0],[539,86,0,0],
+    [560,80,0,0.3],[578,60,0.05,0.5],[580.5,38,0.2,0.6],[583,62,0.02,0.4],[600,88,0,0],[635,12,0.9,0],
+    [642,6,0.97,0],[650,10,0.9,0],[655,52,0.12,0],[660,10,0.9,0],[688,6,0.97,0],[717,12,0.9,0],
+    [725,80,0,0],[1000,85,0,0],[1600,88,0,0],[2100,88,0,0],[2220,86,0,0],[2300,13,0.9,0],[2400,11,0.92,0],
+    [2450,22,0.6,0],[2500,88,0,0],
+  ];
+  function climateAt(ma) {
+    const A = CLIMATE, lerp = (a, b, f) => a + (b - a) * f;
+    if (ma <= A[0][0]) return { edge: A[0][1], snow: A[0][2], hemi: A[0][3] };
+    const last = A[A.length - 1];
+    if (ma >= last[0]) return { edge: last[1], snow: last[2], hemi: last[3] };
+    for (let i = 0; i < A.length - 1; i++) {
+      if (ma >= A[i][0] && ma <= A[i + 1][0]) {
+        const f = (ma - A[i][0]) / (A[i + 1][0] - A[i][0]);
+        return { edge: lerp(A[i][1], A[i+1][1], f), snow: lerp(A[i][2], A[i+1][2], f), hemi: lerp(A[i][3], A[i+1][3], f) };
+      }
+    }
+    return { edge: last[1], snow: last[2], hemi: last[3] };
+  }
+
   function Globe(canvas, mesh) {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, 1, 0.05, 400);
@@ -78,26 +109,93 @@
     renderer.setClearColor(0x03040a, 1);
     renderer.outputEncoding = THREE.sRGBEncoding;
 
+    const earth = new THREE.Group();
+    scene.add(earth);
+
+    // OrbitControls is used only for zoom (dolly) and for camera-orbit when the
+    // user drags empty space; rotating the globe itself is handled below.
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true; controls.dampingFactor = 0.08;
-    controls.rotateSpeed = 0.55; controls.zoomSpeed = 0.9;
+    controls.rotateSpeed = 0.5; controls.zoomSpeed = 0.9;
     controls.enablePan = false; controls.minDistance = 1.18; controls.maxDistance = 9;
-    controls.autoRotate = true; controls.autoRotateSpeed = 0.28;
-    let userActive = false, idleTimer = null;
-    controls.addEventListener('start', () => { userActive = true; controls.autoRotate = false; if (idleTimer) clearTimeout(idleTimer); });
-    controls.addEventListener('end', () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (spinEnabled) controls.autoRotate = true; }, 4000); userActive = false; });
+    controls.autoRotate = false;
 
-    const SUN = new THREE.Vector3(0.65, 0.32, 0.68).normalize();
-
+    // Sun roughly toward the viewer so the visible face stays lit; offset up/right
+    // for grazing light that reveals terrain relief.
+    const SUN = new THREE.Vector3(0.34, 0.30, 0.90).normalize();
     scene.add(makeStars());
     const sun = sunSprite(); sun.position.copy(SUN).multiplyScalar(60); scene.add(sun);
 
-    const earth = new THREE.Group();
-    scene.add(earth);
+    // ---- interaction: drag the globe -> spin Earth (stays sun-facing);
+    //      drag empty space -> orbit camera; wheel/pinch -> zoom ------------------
+    let userActive = false, idleTimer = null;
+    const raycaster = new THREE.Raycaster();
+    const _sphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), R);
+    const _ndc = new THREE.Vector2(), _hit = new THREE.Vector3(), _right = new THREE.Vector3();
+    const _qy = new THREE.Quaternion(), _qx = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+    let earthDrag = false, lastX = 0, lastY = 0, velX = 0, velY = 0, pointers = 0;
+    const el = renderer.domElement;
+    function hitGlobe(cx, cy) {
+      const r = el.getBoundingClientRect();
+      _ndc.x = ((cx - r.left) / r.width) * 2 - 1;
+      _ndc.y = -((cy - r.top) / r.height) * 2 + 1;
+      raycaster.setFromCamera(_ndc, camera);
+      return raycaster.ray.intersectSphere(_sphere, _hit) !== null;
+    }
+    controls.enableRotate = false;   // rotation handled below; OrbitControls only zooms
+    let orbitDrag = false;
+    function spinEarth(dx, dy) {
+      const sp = 0.006;
+      _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      _qy.setFromAxisAngle(UP, -dx * sp);
+      _qx.setFromAxisAngle(_right, -dy * sp);
+      earth.quaternion.premultiply(_qx).premultiply(_qy);
+    }
+    function orbitCamera(dx, dy) {   // rotate viewpoint around the globe (sun stays fixed)
+      const sp = 0.005;
+      _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      _qy.setFromAxisAngle(UP, -dx * sp);
+      camera.position.applyQuaternion(_qy);
+      // clamp pitch so we don't flip over the poles
+      const cur = Math.acos(Math.max(-1, Math.min(1, camera.position.clone().normalize().y)));
+      const want = -dy * sp, lim = 0.12;
+      const pitch = Math.max(lim - cur, Math.min(Math.PI - lim - cur, want));
+      _qx.setFromAxisAngle(_right, pitch);
+      camera.position.applyQuaternion(_qx);
+      camera.lookAt(0, 0, 0);
+    }
+    el.addEventListener('pointerdown', (e) => {
+      pointers++;
+      userActive = true; if (idleTimer) clearTimeout(idleTimer);
+      if (pointers === 1) {
+        if (hitGlobe(e.clientX, e.clientY)) { earthDrag = true; orbitDrag = false; velX = velY = 0; }
+        else { orbitDrag = true; earthDrag = false; }
+        lastX = e.clientX; lastY = e.clientY;
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      } else { earthDrag = false; orbitDrag = false; }   // 2+ pointers -> pinch zoom
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (pointers !== 1) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      if (earthDrag) { velX = dx; velY = dy; spinEarth(dx, dy); }
+      else if (orbitDrag) orbitCamera(dx, dy);
+    });
+    function endDrag() {
+      pointers = Math.max(0, pointers - 1);
+      if (pointers === 0) {
+        earthDrag = false; orbitDrag = false;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => { userActive = false; }, 3500);
+      }
+    }
+    el.addEventListener('pointerup', endDrag);
+    el.addEventListener('pointercancel', endDrag);
 
     // ---- Ocean ---------------------------------------------------------------
     const oceanUniforms = {
       uSun: { value: SUN }, uTime: { value: 0 }, uMagma: { value: 0 }, uGreen: { value: 0 },
+      uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 },
     };
     const ocean = new THREE.Mesh(
       new THREE.SphereGeometry(R, 128, 96),
@@ -108,7 +206,7 @@
           vec4 wp=modelMatrix*vec4(position,1.0); vView=normalize(cameraPosition-wp.xyz);
           gl_Position=projectionMatrix*viewMatrix*wp; }`,
         fragmentShader: NOISE + `
-          uniform vec3 uSun; uniform float uTime, uMagma, uGreen; varying vec3 vN,vView,vPos;
+          uniform vec3 uSun; uniform float uTime, uMagma, uGreen, uIceEdge, uSnowball, uHemi; varying vec3 vN,vView,vPos;
           void main(){
             vec3 N=normalize(vN), V=normalize(vView), L=normalize(uSun);
             float dif=clamp(dot(N,L),0.0,1.0);
@@ -122,6 +220,14 @@
             col+=vec3(1.0,0.93,0.75)*spec*0.55;
             float fres=pow(1.0-max(dot(N,V),0.0),3.0);
             col=mix(col, vec3(0.28,0.48,0.85), fres*0.5*dif);
+            // sea ice: polar pack ice this era + global freeze in snowball worlds
+            // vPos is the ocean's local position -> reconstruction-frame latitude
+            float olat=degrees(asin(clamp(vPos.y,-1.0,1.0)));
+            float oedge=uIceEdge + (olat>0.0 ? max(0.0,uHemi) : max(0.0,-uHemi))*25.0;
+            float sea=smoothstep(oedge-2.0, oedge+9.0, abs(olat)+mott*7.0-3.5);
+            sea=max(sea, uSnowball*(0.85+0.15*mott));
+            vec3 seaIce=vec3(0.80,0.86,0.93);
+            col=mix(col, seaIce*(0.30+0.8*dif), sea);
             // hadean magma ocean
             if(uMagma>0.001){
               float h=fbm(vPos*3.1+vec3(uTime*0.03));
@@ -142,7 +248,8 @@
     // Present day shows recognisable regions; as a plate drifts far from its
     // present latitude (deep time) the colour blends to a latitude-driven
     // climate palette, since modern biomes wouldn't survive the journey.
-    const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 }, uClimate: { value: 0 } };
+    const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 }, uClimate: { value: 0 },
+      uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 }, uViewInv: { value: new THREE.Matrix3() } };
     const contVert = `attribute float aElev; attribute vec3 aCol;
       varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP; varying float vElev; varying vec3 vCol;
       void main(){ vLocal=normalize(position); vWN=normalize(mat3(modelMatrix)*normalize(position));
@@ -150,6 +257,7 @@
       gl_Position=projectionMatrix*viewMatrix*wp; }`;
     const contFrag = NOISE + `
       uniform vec3 uSun; uniform float uFade; uniform float uClimate;
+      uniform float uIceEdge; uniform float uSnowball; uniform float uHemi; uniform mat3 uViewInv;
       varying vec3 vWN,vLocal,vWP,vCol; varying float vElev;
       vec3 climate(float lat, float e, float micro){
         float al=abs(lat);
@@ -167,8 +275,11 @@
       }
       void main(){
         vec3 N=normalize(vWN), L=normalize(uSun);
-        float lat=degrees(asin(clamp(normalize(vWP).y,-1.0,1.0)));
+        // paleo-latitude in the reconstruction frame (independent of view spin)
+        vec3 paleoDir=normalize(uViewInv*normalize(vWP));
+        float lat=degrees(asin(clamp(paleoDir.y,-1.0,1.0)));
         float plat=degrees(asin(clamp(vLocal.y,-1.0,1.0)));
+        float al=abs(lat);
         float e=clamp(vElev,0.0,1.0);
         float micro=fbm(vLocal*22.0);
         vec3 real=pow(clamp(vCol,0.0,1.0),vec3(2.2));   // sRGB texel -> linear
@@ -177,10 +288,16 @@
         float latShift=clamp(abs(lat-plat)/40.0,0.0,1.0);
         float toClim=clamp(uClimate*0.8 + latShift*0.7,0.0,1.0);
         vec3 col=mix(real,clim,toClim);
-        // ice on any land now at high latitude; snow on high peaks (colder up high)
-        col=mix(col,vec3(0.90,0.93,0.98),smoothstep(63.0,77.0,abs(lat)+micro*6.0-3.0));
-        float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*smoothstep(28.0,54.0,abs(lat));
-        col=mix(col,vec3(0.95,0.96,0.99),snow*0.5);
+        // continental ice: this era's ice edge latitude (hemisphere-biased), plus snowball
+        vec3 ICE=vec3(0.93,0.95,0.99);
+        float edge=uIceEdge + (lat>0.0 ? max(0.0,uHemi) : max(0.0,-uHemi))*25.0;
+        float iceAmt=smoothstep(edge-9.0, edge+7.0, al+micro*7.0-3.5);
+        iceAmt=max(iceAmt, uSnowball*(0.72+0.28*micro));
+        col=mix(col, ICE, iceAmt);
+        // snow on high peaks — broad when the climate is cold, else only high latitudes
+        float cold=smoothstep(88.0,35.0,uIceEdge);
+        float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*clamp(cold*0.55+smoothstep(30.0,60.0,al)*0.7,0.0,1.0);
+        col=mix(col, ICE, snow*0.55*(1.0-iceAmt));
         // real terrain relief: gently perturb normal by the elevation gradient (Mikkelsen)
         float H=e*1.4 + micro*0.05;
         vec3 dpx=dFdx(vWP), dpy=dFdy(vWP);
@@ -296,6 +413,10 @@
       oceanUniforms.uGreen.value = Math.max(0, smooth(1500, 2600, ma) - oceanUniforms.uMagma.value);
       cloudUniforms.uOpacity.value = 0.85 * (1 - oceanUniforms.uMagma.value) * (0.35 + 0.65 * Math.max(fade, 0.4));
       for (const id in plateMeshes) plateMeshes[id].visible = fade > 0.02;
+      // per-era glaciation (see CLIMATE table)
+      const cl = climateAt(ma);
+      contUniforms.uIceEdge.value = cl.edge; contUniforms.uSnowball.value = cl.snow; contUniforms.uHemi.value = cl.hemi;
+      oceanUniforms.uIceEdge.value = cl.edge; oceanUniforms.uSnowball.value = cl.snow; oceanUniforms.uHemi.value = cl.hemi;
     }
     function smooth(a, b, x){ const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t*t*(3-2*t); }
 
@@ -317,6 +438,7 @@
     const prevC = new THREE.Vector3(0, 0, 1), curC = new THREE.Vector3(), _dq = new THREE.Quaternion();
     landCentroid(prevC);
 
+    const _m4 = new THREE.Matrix4(), _spin = new THREE.Quaternion();
     let clock = 0;
     function frame(dt) {
       clock += dt;
@@ -328,13 +450,25 @@
         applyRecon(displayMa);
         if (onTimeAnim) onTimeAnim(displayMa);
       }
-      // keep continents in view: rotate camera by the land-centroid's motion
+      // keep continents in view: spin the Earth by the land-centroid's motion so
+      // the world-space centroid stays put (empty ocean rotates to the back)
       landCentroid(curC);
-      if (followEnabled && animating && !userActive) {
-        _dq.setFromUnitVectors(prevC, curC);
-        camera.position.applyQuaternion(_dq);
+      if (followEnabled && animating && !earthDrag) {
+        _dq.setFromUnitVectors(curC, prevC);
+        earth.quaternion.multiply(_dq);
       }
       prevC.copy(curC);
+      // release momentum after a globe drag
+      if (!earthDrag && (Math.abs(velX) > 0.05 || Math.abs(velY) > 0.05)) {
+        spinEarth(velX, velY); velX *= 0.92; velY *= 0.92;
+      }
+      // gentle idle auto-spin of the Earth (paused while interacting or animating)
+      if (spinEnabled && !userActive && !earthDrag && !animating) {
+        _spin.setFromAxisAngle(UP, dt * 0.045); earth.quaternion.premultiply(_spin);
+      }
+      // view-inverse so shaders read paleo-latitude, not the viewing spin
+      _m4.makeRotationFromQuaternion(earth.quaternion).invert();
+      contUniforms.uViewInv.value.setFromMatrix4(_m4);
       oceanUniforms.uTime.value = clock; cloudUniforms.uTime.value = clock;
       controls.update();
       renderer.render(scene, camera);
@@ -342,18 +476,28 @@
 
     let onTimeAnim = null;
     applyRecon(0);
+    // open facing Africa/Europe (recognisable + well lit) rather than a pole
+    (function () {
+      const d = RECON.sph(24, 18), F = camera.position.clone().normalize();
+      earth.quaternion.setFromUnitVectors(new THREE.Vector3(d[0], d[1], d[2]).normalize(), F);
+      landCentroid(prevC);
+    })();
 
     return {
       scene, camera, renderer, controls, frame,
       setTime(ma){ targetMa = ma; },
       setTimeImmediate(ma){ targetMa = displayMa = ma; applyRecon(ma); },
       getDisplayMa(){ return displayMa; },
-      setSpin(on){ spinEnabled = on; controls.autoRotate = on; },
+      setSpin(on){ spinEnabled = on; },
       setClouds(on){ clouds.visible = on; },
       setFollow(on){ followEnabled = on; },
       onTimeAnim(fn){ onTimeAnim = fn; },
       resize(w, h){ camera.aspect = w/h; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2)); renderer.setSize(w,h,false); },
-      resetView(){ controls.reset(); camera.position.set(0,0.75,2.85); },
+      resetView(){ controls.reset(); camera.position.set(0,0.75,2.85); earth.quaternion.identity(); velX=velY=0; },
+      // debug/testing helpers
+      _earth: earth,
+      _face(dir){ const F = camera.position.clone().normalize(); earth.quaternion.setFromUnitVectors(dir.clone().normalize(), F); },
+      _centroid(){ const o = new THREE.Vector3(); landCentroid(o); return o; },
     };
   }
 
