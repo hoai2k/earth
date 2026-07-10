@@ -1780,11 +1780,15 @@ function intervalAt(ma){
     controls.enableRotate = false;   // rotation handled below; OrbitControls only zooms
     let orbitDrag = false;
     // Turntable rotation: unlimited yaw (spin about the polar axis, with momentum)
-    // + pitch clamped to [-90,90] (tilt toward a pole; no momentum, never rolls).
+    // + pitch (tilt toward a pole; no momentum, never rolls).
     // earth.quaternion = pitch(about screen-X) * yaw(about world-Y).
     const X_AXIS = new THREE.Vector3(1, 0, 0);
     let yaw = 0, pitch = 0, yawVel = 0;
-    const PITCH_LIM = Math.PI / 2;
+    // Pitch is clamped relative to the camera direction so the extremes put the
+    // North / South pole exactly at screen centre (the camera sits a little above
+    // the equator, so the bounds are not simply ±90°).
+    function pitchBounds() { const hi = Math.atan2(camera.position.z, camera.position.y); return [hi - Math.PI, hi]; }
+    function clampPitch(p) { const b = pitchBounds(); return Math.max(b[0], Math.min(b[1], p)); }
     function applyOrientation() {
       _qx.setFromAxisAngle(X_AXIS, pitch);
       _qy.setFromAxisAngle(UP, yaw);
@@ -1793,7 +1797,7 @@ function intervalAt(ma){
     function dragSpin(dx, dy) {   // grabbed surface follows the cursor
       const sp = 0.006;
       yaw += dx * sp;
-      pitch = Math.max(-PITCH_LIM, Math.min(PITCH_LIM, pitch + dy * sp));
+      pitch = clampPitch(pitch + dy * sp);
       yawVel = dx * sp;           // momentum on the spin only, not the tilt
       applyOrientation();
     }
@@ -2126,8 +2130,7 @@ function intervalAt(ma){
       yaw = Math.atan2(-d.x, d.z);
       let dp = d.clone().applyAxisAngle(UP, yaw);
       if (dp.z < 0) { yaw += Math.PI; dp = d.clone().applyAxisAngle(UP, yaw); }
-      pitch = Math.atan2(F.z, F.y) - Math.atan2(dp.z, dp.y);
-      pitch = Math.max(-PITCH_LIM, Math.min(PITCH_LIM, pitch));
+      pitch = clampPitch(Math.atan2(F.z, F.y) - Math.atan2(dp.z, dp.y));
       yawVel = 0; applyOrientation();
       landCentroid(prevC); prevAz = Math.atan2(prevC.z, prevC.x);
     }
