@@ -138,48 +138,65 @@
     earth.add(ocean);
 
     // ---- Continents (one rigid mesh per plate) -------------------------------
-    const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 } };
-    const contVert = `varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP;
+    // Per-vertex real colour (NASA Blue Marble) + real elevation (topography).
+    // Present day shows recognisable regions; as a plate drifts far from its
+    // present latitude (deep time) the colour blends to a latitude-driven
+    // climate palette, since modern biomes wouldn't survive the journey.
+    const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 }, uClimate: { value: 0 } };
+    const contVert = `attribute float aElev; attribute vec3 aCol;
+      varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP; varying float vElev; varying vec3 vCol;
       void main(){ vLocal=normalize(position); vWN=normalize(mat3(modelMatrix)*normalize(position));
-      vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz; gl_Position=projectionMatrix*viewMatrix*wp; }`;
+      vElev=aElev; vCol=aCol; vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz;
+      gl_Position=projectionMatrix*viewMatrix*wp; }`;
     const contFrag = NOISE + `
-      uniform vec3 uSun; uniform float uFade; varying vec3 vWN,vLocal,vWP;
+      uniform vec3 uSun; uniform float uFade; uniform float uClimate;
+      varying vec3 vWN,vLocal,vWP,vCol; varying float vElev;
+      vec3 climate(float lat, float e, float micro){
+        float al=abs(lat);
+        vec3 tropic=vec3(0.14,0.34,0.12), savanna=vec3(0.52,0.50,0.24), desert=vec3(0.74,0.64,0.42);
+        vec3 temper=vec3(0.24,0.40,0.19), boreal=vec3(0.16,0.30,0.19), tundra=vec3(0.52,0.53,0.47), ice=vec3(0.90,0.93,0.97);
+        vec3 c=tropic;
+        c=mix(c,savanna,smoothstep(7.0,17.0,al));
+        c=mix(c,desert,0.85*smoothstep(15.0,24.0,al)*(1.0-smoothstep(30.0,38.0,al)));
+        c=mix(c,temper,smoothstep(30.0,40.0,al));
+        c=mix(c,boreal,smoothstep(45.0,58.0,al));
+        c=mix(c,tundra,smoothstep(58.0,67.0,al));
+        c=mix(c,ice,smoothstep(66.0,76.0,al));
+        c*=(0.85+0.3*micro);
+        return c;
+      }
       void main(){
         vec3 N=normalize(vWN), L=normalize(uSun);
         float lat=degrees(asin(clamp(normalize(vWP).y,-1.0,1.0)));
-        float al=abs(lat);
-        float e=fbm(vLocal*3.4);
-        float e2=fbm(vLocal*9.0+7.0);
-        vec3 tropic=vec3(0.16,0.40,0.14), savanna=vec3(0.55,0.55,0.26), desert=vec3(0.80,0.71,0.47);
-        vec3 temper=vec3(0.28,0.45,0.21), boreal=vec3(0.18,0.33,0.21), tundra=vec3(0.55,0.57,0.50), ice=vec3(0.93,0.95,0.99);
-        vec3 col=tropic;
-        col=mix(col,savanna,smoothstep(7.0,17.0,al));
-        col=mix(col,desert,0.85*smoothstep(15.0,24.0,al)*(1.0-smoothstep(30.0,38.0,al)));
-        col=mix(col,temper,smoothstep(30.0,40.0,al));
-        col=mix(col,boreal,smoothstep(45.0,58.0,al));
-        col=mix(col,tundra,smoothstep(58.0,67.0,al));
-        col=mix(col,ice,smoothstep(66.0,74.0,al));
-        col*= (0.82+0.4*e2);                     // fine texture
-        float mount=smoothstep(0.60,0.80,e);
-        col=mix(col,vec3(0.42,0.37,0.32),mount*0.55);
-        float snow=smoothstep(0.80,0.93,e)*(0.35+al/70.0);
-        col=mix(col,ice,clamp(snow,0.0,1.0));
-        // terrain relief: gently perturb normal by the elevation gradient (Mikkelsen)
-        float H=(e-0.5)+(e2-0.5)*0.25;
+        float plat=degrees(asin(clamp(vLocal.y,-1.0,1.0)));
+        float e=clamp(vElev,0.0,1.0);
+        float micro=fbm(vLocal*22.0);
+        vec3 real=pow(clamp(vCol,0.0,1.0),vec3(2.2));   // sRGB texel -> linear
+        vec3 clim=climate(lat,e,micro);
+        // blend to climate: by age, and by how far this vertex drifted in latitude
+        float latShift=clamp(abs(lat-plat)/40.0,0.0,1.0);
+        float toClim=clamp(uClimate*0.8 + latShift*0.7,0.0,1.0);
+        vec3 col=mix(real,clim,toClim);
+        // ice on any land now at high latitude; snow on high peaks (colder up high)
+        col=mix(col,vec3(0.90,0.93,0.98),smoothstep(63.0,77.0,abs(lat)+micro*6.0-3.0));
+        float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*smoothstep(28.0,54.0,abs(lat));
+        col=mix(col,vec3(0.95,0.96,0.99),snow*0.5);
+        // real terrain relief: gently perturb normal by the elevation gradient (Mikkelsen)
+        float H=e*1.4 + micro*0.05;
         vec3 dpx=dFdx(vWP), dpy=dFdy(vWP);
         float dHx=dFdx(H), dHy=dFdy(H);
         vec3 r1=cross(dpy,N), r2=cross(N,dpx);
         float det=dot(dpx,r1);
         vec3 sg=sign(det)*(dHx*r1+dHy*r2);
-        N=normalize(abs(det)*N - 4.0*sg);
+        N=normalize(abs(det)*N - 1.1*sg);
         float dif=clamp(dot(N,L),0.0,1.0);
-        vec3 lit=col*(0.24+0.9*dif);
-        // subtle terminator warm tint
+        vec3 lit=col*(0.28+0.9*dif);
         lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L)),0.0,1.0),3.0)*dif;
         gl_FragColor=vec4(lit,uFade);
       }`;
 
     const plateMeshes = {};
+    const plateInfo = {};   // id -> { center: THREE.Vector3 (local unit), mass }
     const plateIds = Object.keys(mesh.plates);
     plateIds.forEach((id, pi) => {
       const p = mesh.plates[id];
@@ -187,14 +204,23 @@
       // stagger radii so overlapping plates occlude cleanly (no z-fighting)
       const rad = CONT_R + pi * 0.0012;
       const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+      const elev = new Float32Array(n), colr = new Float32Array(n * 3);
+      const pElev = p.elev || [], pCols = p.cols || [];
+      let ccx=0, ccy=0, ccz=0;
       for (let i = 0; i < n; i++) {
         const s = RECON.sph(v[i*2], v[i*2+1]);
         pos[i*3]=s[0]*rad; pos[i*3+1]=s[1]*rad; pos[i*3+2]=s[2]*rad;
         nor[i*3]=s[0]; nor[i*3+1]=s[1]; nor[i*3+2]=s[2];
+        elev[i]=(pElev[i]||0)/255;
+        colr[i*3]=(pCols[i*3]||128)/255; colr[i*3+1]=(pCols[i*3+1]||128)/255; colr[i*3+2]=(pCols[i*3+2]||128)/255;
+        ccx+=s[0]; ccy+=s[1]; ccz+=s[2];
       }
+      plateInfo[id] = { center: new THREE.Vector3(ccx/n, ccy/n, ccz/n).normalize(), mass: n };
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      g.setAttribute('aElev', new THREE.BufferAttribute(elev, 1));
+      g.setAttribute('aCol', new THREE.BufferAttribute(colr, 3));
       g.setIndex(p.idx);
       const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
         uniforms: contUniforms, vertexShader: contVert, fragmentShader: contFrag,
@@ -265,6 +291,7 @@
       // era-driven appearance
       const fade = 1 - smooth(1000, 1450, ma);
       contUniforms.uFade.value = fade;
+      contUniforms.uClimate.value = smooth(15, 250, ma);  // real biomes -> climate palette
       oceanUniforms.uMagma.value = smooth(3200, 4200, ma);
       oceanUniforms.uGreen.value = Math.max(0, smooth(1500, 2600, ma) - oceanUniforms.uMagma.value);
       cloudUniforms.uOpacity.value = 0.85 * (1 - oceanUniforms.uMagma.value) * (0.35 + 0.65 * Math.max(fade, 0.4));
@@ -272,16 +299,42 @@
     }
     function smooth(a, b, x){ const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t*t*(3-2*t); }
 
+    // Weighted centroid direction of all land at the current time. Continents
+    // that have drifted far still count; the empty ocean hemisphere is opposite.
+    const _v = new THREE.Vector3(), _acc = new THREE.Vector3();
+    function landCentroid(out) {
+      _acc.set(0, 0, 0);
+      for (const id in plateMeshes) {
+        if (!plateMeshes[id].visible) continue;
+        const info = plateInfo[id];
+        _v.copy(info.center).applyQuaternion(plateMeshes[id].quaternion).multiplyScalar(info.mass);
+        _acc.add(_v);
+      }
+      if (_acc.lengthSq() < 1e-9) _acc.set(0, 0, 1);
+      return out.copy(_acc).normalize();
+    }
+    let followEnabled = true;
+    const prevC = new THREE.Vector3(0, 0, 1), curC = new THREE.Vector3(), _dq = new THREE.Quaternion();
+    landCentroid(prevC);
+
     let clock = 0;
     function frame(dt) {
       clock += dt;
       // ease displayed time toward target
-      if (Math.abs(displayMa - targetMa) > 0.01) {
+      const animating = Math.abs(displayMa - targetMa) > 0.01;
+      if (animating) {
         displayMa += (targetMa - displayMa) * Math.min(1, dt * 3.0);
         if (Math.abs(displayMa - targetMa) < 0.05) displayMa = targetMa;
         applyRecon(displayMa);
         if (onTimeAnim) onTimeAnim(displayMa);
       }
+      // keep continents in view: rotate camera by the land-centroid's motion
+      landCentroid(curC);
+      if (followEnabled && animating && !userActive) {
+        _dq.setFromUnitVectors(prevC, curC);
+        camera.position.applyQuaternion(_dq);
+      }
+      prevC.copy(curC);
       oceanUniforms.uTime.value = clock; cloudUniforms.uTime.value = clock;
       controls.update();
       renderer.render(scene, camera);
@@ -297,6 +350,7 @@
       getDisplayMa(){ return displayMa; },
       setSpin(on){ spinEnabled = on; controls.autoRotate = on; },
       setClouds(on){ clouds.visible = on; },
+      setFollow(on){ followEnabled = on; },
       onTimeAnim(fn){ onTimeAnim = fn; },
       resize(w, h){ camera.aspect = w/h; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2)); renderer.setSize(w,h,false); },
       resetView(){ controls.reset(); camera.position.set(0,0.75,2.85); },

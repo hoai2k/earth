@@ -18,7 +18,9 @@
     "@turf/helpers": "^6.5.0",
     "@turf/simplify": "^6.5.0",
     "earcut": "^2.2.4",
+    "jpeg-js": "^0.4.4",
     "playwright": "1.48",
+    "pngjs": "^7.0.0",
     "three": "^0.128.0"
   }
 }

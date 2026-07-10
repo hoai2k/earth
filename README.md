@@ -10,13 +10,18 @@ Precambrian. Each geological era comes with a panel of fascinating, sourced fact
 
 ## Features
 
-- **Realistic procedural globe** — an ocean with sun-glint and a fresnel limb, an
-  atmospheric glow, drifting clouds, a starfield, and continents shaded live by their
-  **current latitude** (so polar ice caps appear on continents that wander over a pole —
-  watch Gondwana freeze!).
+- **Real Earth imagery** — continents carry per-vertex colour from NASA Blue Marble and
+  real elevation from a topography map, so present-day regions are recognisable (the
+  Sahara, Himalayas, Andes, Amazon…) with genuine mountain relief. Ocean has sun-glint
+  and a fresnel limb, plus atmospheric glow, drifting clouds and a starfield.
+- **Climate that follows the plates** — as a landmass drifts far from its present
+  latitude in deep time, its colours blend to a latitude-driven climate palette, so ice
+  caps appear on continents that wander over a pole (watch Gondwana freeze!) instead of
+  carrying the modern Sahara to the South Pole.
 - **Plate-tectonic reconstruction** — every landmass is a rigid tectonic plate that
   rotates to its paleo-position. Move the slider and the continents animate smoothly
-  between reconstructions.
+  between reconstructions, and the **camera tracks the land** so the continents stay in
+  view (the empty ocean hemisphere drifts to the back).
 - **Time controls** — a non-linear slider (recent time is expanded), a numeric age box,
   a geological-period dropdown, a colour-coded timeline strip, and a *Play through time*
   button that sweeps across all of Earth history.
@@ -41,7 +46,10 @@ Precambrian. Each geological era comes with a panel of fascinating, sourced fact
    watertight triangle meshes. Land is grouped into 11 tectonic blocks (India, Arabia,
    Siberia, etc. split out from the modern plates), rasterised on a 0.5° grid, and the
    coastlines are Laplacian-smoothed in 3D. → `data/plates-mesh.json`
-2. `encode-mesh.js` — packs the mesh into a compact base64 blob. → `data/mesh-embed.js`
+2. `bake-appearance.js` — samples NASA Blue Marble colour and a topography map into each
+   mesh vertex (coastal vertices search a small neighbourhood so shores aren't ocean-blue;
+   elevation is smoothed to avoid faceting).
+3. `encode-mesh.js` — packs verts + colour + elevation into a compact base64 blob. → `data/mesh-embed.js`
 3. `assemble.js` — inlines Three.js, the mesh, and all source into a single
    self-contained `index.html`.
 4. `assemble-artifact.js` — a content-only variant for embedded hosting.
@@ -72,3 +80,4 @@ are largely unknown (the globe shows early Earth's changing surface instead).
 ## Credits
 
 Built with [Three.js](https://threejs.org/). Continental outlines © Natural Earth.
+Surface colour © NASA Blue Marble; topography from public elevation imagery.
