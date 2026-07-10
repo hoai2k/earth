@@ -144,11 +144,11 @@
     }
     controls.enableRotate = false;   // rotation handled below; OrbitControls only zooms
     let orbitDrag = false;
-    function spinEarth(dx, dy) {
+    function spinEarth(dx, dy) {   // grabbed surface follows the cursor
       const sp = 0.006;
       _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-      _qy.setFromAxisAngle(UP, -dx * sp);
-      _qx.setFromAxisAngle(_right, -dy * sp);
+      _qy.setFromAxisAngle(UP, dx * sp);
+      _qx.setFromAxisAngle(_right, dy * sp);
       earth.quaternion.premultiply(_qx).premultiply(_qy);
     }
     function orbitCamera(dx, dy) {   // rotate viewpoint around the globe (sun stays fixed)

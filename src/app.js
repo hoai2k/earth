@@ -145,12 +145,14 @@
     window.addEventListener('resize', doResize);
   }
 
-  // ---- playback: sweep from present back through time -----------------------
-  let playFrac=0, playDir=1;
+  // ---- playback: play FORWARD in time from the current age to the present -----
+  // frac 1 = oldest, frac 0 = present; starting at the present loops to the oldest.
+  let playFrac=0;
   function togglePlay(){ playing?stopPlay():startPlay(); }
   function setPlayBtn(ic,label){ const b=$('#playBtn'); b.querySelector('.ic').textContent=ic; b.querySelector('.lbl').textContent=' '+label; }
   function startPlay(){ playing=true; setPlayBtn('❚❚','Pause');
-    playFrac=maToFrac(globe.getDisplayMa()); if(playFrac>=0.999){playFrac=0; playDir=1;} }
+    playFrac=maToFrac(globe.getDisplayMa());
+    if(playFrac<=0.001){ playFrac=1; const ma=fracToMa(1); globe.setTimeImmediate(ma); updateUI(ma); } }
   function stopPlay(){ if(!playing)return; playing=false; setPlayBtn('▶','Play through time'); }
 
   function doResize(){ const w=window.innerWidth,h=window.innerHeight; globe.resize(w,h); }
@@ -208,10 +210,9 @@
     return function frame(now){
       const dt=Math.min(0.05,(now-(prev||now))/1000); prev=now;
       if(playing){
-        playFrac += playDir*dt*0.022;           // ~45s per full sweep
-        if(playFrac>=1){ playFrac=1; playDir=-1; }
-        if(playFrac<=0){ playFrac=0; playDir=1; }
-        setTime(fracToMa(playFrac));
+        playFrac -= dt*0.022;                    // forward in time (~45s full sweep)
+        if(playFrac<=0){ playFrac=0; setTime(fracToMa(0)); stopPlay(); }
+        else setTime(fracToMa(playFrac));
       }
       globe.frame(dt);
       requestAnimationFrame(frame);
