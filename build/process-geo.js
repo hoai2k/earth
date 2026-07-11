@@ -138,9 +138,6 @@ function oddCount(xs, x) { let c = 0; for (let k = 0; k < xs.length; k++) if (xs
 // Watertight scanline rasterizer. Each polygon is filled independently
 // (outer ring minus holes) and UNION-ed, so shared country borders don't
 // cancel. Quads share corner vertices -> no cracks; hugs the sphere.
-const COAST_RB = 4;      // feather/blur radius in grid cells (~2 deg) for coastal coverage
-const COAST_EMIT = 0.045; // emit a cell if any corner's land coverage exceeds this (dilates into ocean)
-
 function buildPlateMesh(polysIn) {
   const polys = polysIn.filter(p => Array.isArray(p) && Array.isArray(p[0]) && Array.isArray(p[0][0]) && p[0].length > 3);
   let latMin = 90, latMax = -90;
@@ -165,38 +162,18 @@ function buildPlateMesh(polysIn) {
       }
     }
   }
-  // Coverage field: blurred fraction of land in a box window (longitude wraps).
-  // ~1 deep inland, ~0.5 at the coast, decaying to 0 a few cells offshore. This
-  // drives a soft alpha edge so coastlines lose their razor sharpness and
-  // colliding plates blend where their fringes overlap.
-  const isLand = (i, j) => land.has((((i % NI) + NI) % NI) + ':' + j);
-  const covCache = new Map();
-  function cornerCov(i, j) {
-    const k = i + ':' + j; let c = covCache.get(k); if (c !== undefined) return c;
-    let cnt = 0, tot = 0;
-    for (let dj = -COAST_RB; dj < COAST_RB; dj++) for (let di = -COAST_RB; di < COAST_RB; di++) { tot++; if (isLand(i + di, j + dj)) cnt++; }
-    c = cnt / tot; covCache.set(k, c); return c;
-  }
-  // Dilate the land set by the feather radius so the mesh reaches into the ocean.
-  const cand = new Set();
-  for (const key of land) {
-    const [i, j] = key.split(':').map(Number);
-    for (let dj = -COAST_RB; dj <= COAST_RB; dj++) for (let di = -COAST_RB; di <= COAST_RB; di++) cand.add((((i + di) % NI) + NI) % NI + ':' + (j + dj));
-  }
-  const vmap = new Map(), verts = [], coast = [], idx = [];
+  const vmap = new Map(), verts = [], idx = [];
   function vid(i, j) {
     const k = i + ':' + j; let v = vmap.get(k);
-    if (v === undefined) { v = verts.length / 2; verts.push(-180 + i * GRID, -90 + j * GRID); coast.push(cornerCov(i, j)); vmap.set(k, v); }
+    if (v === undefined) { v = verts.length / 2; verts.push(-180 + i * GRID, -90 + j * GRID); vmap.set(k, v); }
     return v;
   }
-  for (const key of cand) {
+  for (const key of land) {
     const [i, j] = key.split(':').map(Number);
-    const cov = Math.max(cornerCov(i, j), cornerCov(i + 1, j), cornerCov(i + 1, j + 1), cornerCov(i, j + 1));
-    if (cov < COAST_EMIT) continue;
     const a = vid(i, j), b = vid(i + 1, j), c = vid(i + 1, j + 1), d = vid(i, j + 1);
     idx.push(a, b, c, a, c, d);
   }
-  return { verts, idx, coast };
+  return { verts, idx };
 }
 
 // Antarctica: rasterize in a south-polar plane for even coverage (no pole
@@ -223,33 +200,17 @@ function buildAntCap(polys) {
     }
     return c;
   }
-  // Precompute the inside mask, then a blurred coverage field (as in buildPlateMesh).
-  const cells = new Map();
-  for (let i = -N; i < N; i++) for (let j = -N; j < N; j++) cells.set(i + ':' + j, inside((i + 0.5) * PG, (j + 0.5) * PG));
-  const RB = 3;
-  const covCache = new Map();
-  function cornerCov(i, j) {
-    const k = i + ':' + j; let c = covCache.get(k); if (c !== undefined) return c;
-    let cnt = 0, tot = 0;
-    for (let dj = -RB; dj < RB; dj++) for (let di = -RB; di < RB; di++) { tot++; if (cells.get((i + di) + ':' + (j + dj))) cnt++; }
-    c = cnt / tot; covCache.set(k, c); return c;
-  }
-  const cand = new Set();
-  for (const [k, val] of cells) { if (!val) continue; const [i, j] = k.split(':').map(Number); for (let dj = -RB; dj <= RB; dj++) for (let di = -RB; di <= RB; di++) cand.add((i + di) + ':' + (j + dj)); }
-  const vmap = new Map(), verts = [], coast = [], idx = [];
+  const vmap = new Map(), verts = [], idx = [];
   function vid(i, j) {
     const k = i + ':' + j; let v = vmap.get(k);
-    if (v === undefined) { v = verts.length / 2; const ll = fromPolar([i * PG, j * PG]); verts.push(ll[0], ll[1]); coast.push(cornerCov(i, j)); vmap.set(k, v); }
+    if (v === undefined) { v = verts.length / 2; const ll = fromPolar([i * PG, j * PG]); verts.push(ll[0], ll[1]); vmap.set(k, v); }
     return v;
   }
-  for (const key of cand) {
-    const [i, j] = key.split(':').map(Number);
-    const cov = Math.max(cornerCov(i, j), cornerCov(i + 1, j), cornerCov(i + 1, j + 1), cornerCov(i, j + 1));
-    if (cov < COAST_EMIT) continue;
-    const a = vid(i, j), b = vid(i + 1, j), c = vid(i + 1, j + 1), d = vid(i, j + 1);
-    idx.push(a, b, c, a, c, d);
+  for (let i = -N; i < N; i++) for (let j = -N; j < N; j++) {
+    const x = (i + 0.5) * PG, y = (j + 0.5) * PG;
+    if (inside(x, y)) { const a=vid(i,j),b=vid(i+1,j),c=vid(i+1,j+1),d=vid(i,j+1); idx.push(a,b,c,a,c,d); }
   }
-  return { verts, idx, coast };
+  return { verts, idx };
 }
 
 // Laplacian smoothing in 3D (dateline/pole-safe): rounds the rasterized
@@ -291,8 +252,7 @@ for (const id of Object.keys(PLATE_NAMES)) {
   const m = { verts: smoothMesh(m0.verts, m0.idx, 3, 0.5), idx: m0.idx };
   // round to reduce size
   const verts = m.verts.map(v => Math.round(v * 100) / 100);
-  const coast = m0.coast.map(c => Math.max(0, Math.min(255, Math.round(c * 255))));
-  out.plates[id] = { name: PLATE_NAMES[id], verts, idx: m.idx, coast };
+  out.plates[id] = { name: PLATE_NAMES[id], verts, idx: m.idx };
   totalV += verts.length / 2;
   totalT += m.idx.length / 3;
   console.log(`${id.padEnd(4)} ${PLATE_NAMES[id].padEnd(28)} verts=${(verts.length/2).toString().padStart(6)} tris=${(m.idx.length/3).toString().padStart(6)}`);
