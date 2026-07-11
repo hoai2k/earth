@@ -1940,7 +1940,8 @@ function intervalAt(ma){
       uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 },
       uAtlas: { value: atlasTex }, uColor: { value: colorTex }, uTopo: { value: topoTex },
       uQ: { value: uQ }, uC: { value: uC }, uE1: { value: uE1 }, uE2: { value: uE2 },
-      uRect: { value: uRect }, uRs: { value: uRs }, uDR: { value: FIELD.drange }, uK: { value: 3.0 } };
+      uRect: { value: uRect }, uRs: { value: uRs }, uDR: { value: FIELD.drange }, uK: { value: 3.0 },
+      uAge: { value: 0 } };
 
     const contVert = `varying vec3 vLocal; varying vec3 vWN; varying vec3 vWP;
       void main(){ vLocal=normalize(position); vWN=normalize(mat3(modelMatrix)*normalize(position));
@@ -1948,7 +1949,7 @@ function intervalAt(ma){
       gl_Position=projectionMatrix*viewMatrix*wp; }`;
     const contFrag = NOISE + `
       #define NP ${NP}
-      uniform vec3 uSun; uniform float uFade, uClimate, uIceEdge, uSnowball, uHemi, uDR, uK;
+      uniform vec3 uSun; uniform float uFade, uClimate, uIceEdge, uSnowball, uHemi, uDR, uK, uAge;
       uniform sampler2D uAtlas, uColor, uTopo;
       uniform vec4 uQ[NP]; uniform vec3 uC[NP], uE1[NP], uE2[NP]; uniform vec4 uRect[NP]; uniform float uRs[NP];
       varying vec3 vLocal, vWN, vWP;
@@ -1989,8 +1990,15 @@ function intervalAt(ma){
           else if(d<second){ second=d; secondL=L; }
         }
         float field=smin(best,second,uK);            // fuse nearby coasts
-        float micro=fbm(vLocal*22.0);
-        float micro2=fbm(vLocal*64.0);
+        float haveSecond=1.0-step(uDR*1.5,second);   // second plate actually present here
+        float bw=mix(1.0, clamp(0.5+(second-best)*0.10,0.0,1.0), haveSecond);
+        // noise rides in the PLATE frame (bestL/secondL rotate with the land),
+        // so detail drifts with its continent instead of the land sliding under
+        // a static pattern; a slow age-driven domain shift makes it evolve too.
+        vec3 nL=normalize(mix(secondL,bestL,bw));
+        vec3 nOff=vec3(uAge*0.011, uAge*0.007, -uAge*0.009);
+        float micro=fbm(nL*22.0+nOff);
+        float micro2=fbm(nL*64.0-nOff*1.7);
         float w=0.85;
         // dither the contour with noise so the sub-degree tile stairs break up
         float land=1.0-smoothstep(-w, w, field + (micro-0.5)*1.1 + (micro2-0.5)*0.6);
@@ -2003,12 +2011,14 @@ function intervalAt(ma){
         vec2 cuv=llUV(bestL), cuv2=llUV(secondL);
         vec3 real=pow(clamp(texture2D(uColor,cuv).rgb,0.0,1.0),vec3(2.2));
         float e=clamp(texture2D(uTopo,cuv).r,0.0,1.0);
-        float haveSecond=1.0-step(uDR*1.5,second);   // second plate actually present here
-        float bw=mix(1.0, clamp(0.5+(second-best)*0.10,0.0,1.0), haveSecond);
         vec3 real2=pow(clamp(texture2D(uColor,cuv2).rgb,0.0,1.0),vec3(2.2));
         float e2=clamp(texture2D(uTopo,cuv2).r,0.0,1.0);
         real=mix(real2,real,bw);
         e=mix(e2,e,bw);
+        // water pixels (inland lakes / offshore blue caught by the dilated
+        // fringe) are near-black albedo that no sun angle can light — swap
+        // them for the latitude climate colour instead.
+        float wat=smoothstep(0.005,0.06, real.b-max(real.r,real.g));
         float bestPresLat=degrees(asin(clamp(mix(secondL.y,bestL.y,bw),-1.0,1.0)));
         // collision orogeny: where two plates' interiors overlap, the crust
         // thickens — build a ridged mountain belt along the suture and let it
@@ -2020,7 +2030,7 @@ function intervalAt(ma){
         vec3 clim=climate(lat,e,micro);
         float latShift=clamp(abs(lat-bestPresLat)/40.0,0.0,1.0);
         float toClim=clamp(uClimate*0.8 + latShift*0.7,0.0,1.0);
-        vec3 col=mix(real,clim,toClim);
+        vec3 col=mix(real,clim,max(toClim,wat));
         // exposed rock over the young mountain belt
         vec3 rock=vec3(0.40,0.34,0.27)*(0.72+0.55*micro);
         col=mix(col, rock, smoothstep(0.10,0.55,uplift)*0.8);
@@ -2040,10 +2050,17 @@ function intervalAt(ma){
         float dHx=dFdx(H), dHy=dFdy(H);
         vec3 r1=cross(dpy,N), r2=cross(N,dpx);
         float det=dot(dpx,r1);
-        vec3 sg=sign(det)*(dHx*r1+dHy*r2);
-        N=normalize(abs(det)*N - 0.95*sg);
+        // bounded bump: cap the slope of the perturbation so steep screen-space
+        // gradients (ridged uplift, texel steps) can never flip the normal away
+        // from the sun and leave permanently-black facets.
+        vec3 pert=(-0.95*sign(det))*(dHx*r1+dHy*r2)/max(abs(det),1e-8);
+        float pl=length(pert);
+        pert*=min(pl,1.1)/max(pl,1e-6);
+        N=normalize(N+pert);
         float dif=clamp(dot(N,L2),0.0,1.0);
-        vec3 lit=col*(0.28+0.9*dif);
+        // ambient floor + faint sky fill so shaded slopes stay readable
+        float fill=0.10*clamp(0.5+0.5*N.y,0.0,1.0);
+        vec3 lit=col*(0.34+0.82*dif+fill);
         lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L2)),0.0,1.0),3.0)*dif;
         gl_FragColor=vec4(lit, uFade*land);
       }`;
@@ -2114,6 +2131,7 @@ function intervalAt(ma){
         curQ[i].set(q[0], q[1], q[2], q[3]);
       }
       // era-driven appearance
+      contUniforms.uAge.value = ma;   // evolves the surface noise through time
       const fade = 1 - smooth(1000, 1450, ma);
       contUniforms.uFade.value = fade;
       contUniforms.uClimate.value = smooth(15, 250, ma);  // real biomes -> climate palette
