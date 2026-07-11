@@ -11,6 +11,7 @@ html = html.replace('<link rel="stylesheet" href="./src/styles.css">', `<style>\
 
 const scriptsBlock = `<script src="./vendor/three.min.js"></script>
 <script src="./vendor/OrbitControls.js"></script>
+<script src="./data/field-embed.js"></script>
 <script src="./src/data.js"></script>
 <script src="./src/recon.js"></script>
 <script src="./src/globe.js"></script>
@@ -19,7 +20,7 @@ const scriptsBlock = `<script src="./vendor/three.min.js"></script>
 const inlineOrder = [
   'vendor/three.min.js',
   'vendor/OrbitControls.js',
-  'data/mesh-embed.js',
+  'data/field-embed.js',
   'src/data.js',
   'src/recon.js',
   'src/globe.js',

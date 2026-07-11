@@ -27,6 +27,8 @@ jobs:
         run: |
           mkdir -p dist
           cp index.html dist/index.html
+          # rigid-plate fallback (previous renderer) kept at /classic.html
+          cp index-classic.html dist/classic.html
           touch dist/.nojekyll
 
       - uses: actions/configure-pages@v5

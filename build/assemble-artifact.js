@@ -12,7 +12,7 @@ const dev = read('index.dev.html');
 const body = dev.slice(dev.indexOf('<body>') + 6, dev.indexOf('<script'));
 
 const inlineOrder = [
-  'vendor/three.min.js', 'vendor/OrbitControls.js', 'data/mesh-embed.js',
+  'vendor/three.min.js', 'vendor/OrbitControls.js', 'data/field-embed.js',
   'src/data.js', 'src/recon.js', 'src/globe.js', 'src/app.js',
 ];
 const scripts = inlineOrder.map(f => `<script>\n${read(f)}\n</script>`).join('\n');

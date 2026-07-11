@@ -101,7 +101,7 @@
     return { edge: last[1], snow: last[2], hemi: last[3] };
   }
 
-  function Globe(canvas, mesh) {
+  function Globe(canvas, FIELD) {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, 1, 0.05, 400);
     camera.position.set(0, 0.75, 2.85);
@@ -258,22 +258,61 @@
     );
     earth.add(ocean);
 
-    // ---- Continents (one rigid mesh per plate) -------------------------------
-    // Per-vertex real colour (NASA Blue Marble) + real elevation (topography).
-    // Present day shows recognisable regions; as a plate drifts far from its
-    // present latitude (deep time) the colour blends to a latitude-driven
-    // climate palette, since modern biomes wouldn't survive the journey.
+    // ---- Continents (implicit distance-field union, re-evaluated per frame) ---
+    // Each plate's LAND is a baked signed-distance field (a stereographic tile
+    // in the atlas). The fragment shader rotates every plate's field by its
+    // reconstruction quaternion and takes a smooth-min UNION of them, so the
+    // coastline is the level-set of one moving field: plates that meet fuse into
+    // a single landmass (land bridges), plates that separate pinch apart (rifts),
+    // and overlaps raise mountains along the suture. Real colour/topography ride
+    // along because each plate samples them in its own PRESENT-day frame.
+    const NP = FIELD.plates.length;
+    const uQ = [], uC = [], uE1 = [], uE2 = [], uRect = [], uRs = [];
+    const curQ = [], plateList = [];
+    FIELD.plates.forEach(p => {
+      uQ.push(new THREE.Vector4(0, 0, 0, 1));
+      uC.push(new THREE.Vector3(p.c[0], p.c[1], p.c[2]));
+      uE1.push(new THREE.Vector3(p.e1[0], p.e1[1], p.e1[2]));
+      uE2.push(new THREE.Vector3(p.e2[0], p.e2[1], p.e2[2]));
+      uRect.push(new THREE.Vector4(p.rect[0], p.rect[1], p.rect[2], p.rect[3]));
+      uRs.push(p.Rs);
+      curQ.push(new THREE.Quaternion());
+      plateList.push({ id: p.id, center: new THREE.Vector3(p.c[0], p.c[1], p.c[2]), mass: p.mass });
+    });
+    function loadTex(uri, opt) {
+      const img = new Image();
+      const tex = new THREE.Texture(img);
+      tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+      tex.wrapS = opt.wrap ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.flipY = false;
+      img.onload = () => { tex.needsUpdate = true; renderer.render(scene, camera); };
+      img.src = uri;
+      return tex;
+    }
+    const atlasTex = loadTex(FIELD.atlas, { wrap: false });
+    const colorTex = loadTex(FIELD.color, { wrap: true });
+    const topoTex = loadTex(FIELD.topo, { wrap: true });
+
     const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 }, uClimate: { value: 0 },
-      uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 }, uViewInv: { value: new THREE.Matrix3() } };
-    const contVert = `attribute float aElev; attribute vec3 aCol;
-      varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP; varying float vElev; varying vec3 vCol;
+      uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 },
+      uAtlas: { value: atlasTex }, uColor: { value: colorTex }, uTopo: { value: topoTex },
+      uQ: { value: uQ }, uC: { value: uC }, uE1: { value: uE1 }, uE2: { value: uE2 },
+      uRect: { value: uRect }, uRs: { value: uRs }, uDR: { value: FIELD.drange }, uK: { value: 3.0 } };
+
+    const contVert = `varying vec3 vLocal; varying vec3 vWN; varying vec3 vWP;
       void main(){ vLocal=normalize(position); vWN=normalize(mat3(modelMatrix)*normalize(position));
-      vElev=aElev; vCol=aCol; vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz;
+      vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz;
       gl_Position=projectionMatrix*viewMatrix*wp; }`;
     const contFrag = NOISE + `
-      uniform vec3 uSun; uniform float uFade; uniform float uClimate;
-      uniform float uIceEdge; uniform float uSnowball; uniform float uHemi; uniform mat3 uViewInv;
-      varying vec3 vWN,vLocal,vWP,vCol; varying float vElev;
+      #define NP ${NP}
+      uniform vec3 uSun; uniform float uFade, uClimate, uIceEdge, uSnowball, uHemi, uDR, uK;
+      uniform sampler2D uAtlas, uColor, uTopo;
+      uniform vec4 uQ[NP]; uniform vec3 uC[NP], uE1[NP], uE2[NP]; uniform vec4 uRect[NP]; uniform float uRs[NP];
+      varying vec3 vLocal, vWN, vWP;
+      vec3 qrot(vec4 q, vec3 v){ return v + 2.0*cross(q.xyz, cross(q.xyz, v) + q.w*v); }
+      float smin(float a, float b, float k){ float h=clamp(0.5+0.5*(b-a)/k,0.0,1.0); return mix(b,a,h)-k*h*(1.0-h); }
+      vec2 llUV(vec3 L){ float lon=atan(-L.z, L.x); float lat=asin(clamp(L.y,-1.0,1.0)); return vec2(lon/6.2831853+0.5, 0.5 - lat/3.14159265); }
       vec3 climate(float lat, float e, float micro){
         float al=abs(lat);
         vec3 tropic=vec3(0.14,0.34,0.12), savanna=vec3(0.52,0.50,0.24), desert=vec3(0.74,0.64,0.42);
@@ -289,80 +328,75 @@
         return c;
       }
       void main(){
-        vec3 N=normalize(vWN), L=normalize(uSun);
-        // paleo-latitude in the reconstruction frame (independent of view spin)
-        vec3 paleoDir=normalize(uViewInv*normalize(vWP));
-        float lat=degrees(asin(clamp(paleoDir.y,-1.0,1.0)));
-        float plat=degrees(asin(clamp(vLocal.y,-1.0,1.0)));
-        float al=abs(lat);
-        float e=clamp(vElev,0.0,1.0);
+        vec3 D=normalize(vLocal);
+        // union of the plate distance fields (degrees); track two smallest for
+        // smooth fusion, and the winning plate's present-frame direction.
+        float best=uDR*2.0, second=uDR*2.0; vec3 bestL=D; float bestPresLat=0.0;
+        for(int k=0;k<NP;k++){
+          vec3 L=qrot(vec4(-uQ[k].xyz,uQ[k].w), D);
+          float t=dot(L,uC[k]);
+          if(t<0.05) continue;                      // plate elsewhere on the globe
+          float kf=2.0/(1.0+t);
+          float un=(kf*dot(L,uE1[k]))/uRs[k]*0.5+0.5;
+          float vn=(kf*dot(L,uE2[k]))/uRs[k]*0.5+0.5;
+          if(un<0.0||un>1.0||vn<0.0||vn>1.0) continue;
+          vec2 uv=uRect[k].xy+vec2(un,vn)*uRect[k].zw;
+          float d=texture2D(uAtlas,uv).r*(2.0*uDR)-uDR;   // decode signed degrees
+          if(d<best){ second=best; best=d; bestL=L; bestPresLat=degrees(asin(clamp(L.y,-1.0,1.0))); }
+          else if(d<second){ second=d; }
+        }
+        float field=smin(best,second,uK);            // fuse nearby coasts
         float micro=fbm(vLocal*22.0);
-        vec3 real=pow(clamp(vCol,0.0,1.0),vec3(2.2));   // sRGB texel -> linear
+        float micro2=fbm(vLocal*64.0);
+        float w=0.85;
+        // dither the contour with noise so the sub-degree tile stairs break up
+        float land=1.0-smoothstep(-w, w, field + (micro-0.5)*1.1 + (micro2-0.5)*0.6);
+        if(land<0.02) discard;
+
+        float lat=degrees(asin(clamp(D.y,-1.0,1.0)));  // paleo latitude (turntable-independent)
+        float al=abs(lat);
+        vec2 cuv=llUV(bestL);
+        vec3 real=pow(clamp(texture2D(uColor,cuv).rgb,0.0,1.0),vec3(2.2));
+        float e=clamp(texture2D(uTopo,cuv).r,0.0,1.0);
+        // collision uplift: where two plates overlap (both well inside), grow mountains
+        float overlap=clamp(-best/5.0,0.0,1.0)*clamp(-second/5.0,0.0,1.0);
+        e=clamp(e+overlap*0.55,0.0,1.0);
         vec3 clim=climate(lat,e,micro);
-        // blend to climate: by age, and by how far this vertex drifted in latitude
-        float latShift=clamp(abs(lat-plat)/40.0,0.0,1.0);
+        float latShift=clamp(abs(lat-bestPresLat)/40.0,0.0,1.0);
         float toClim=clamp(uClimate*0.8 + latShift*0.7,0.0,1.0);
         vec3 col=mix(real,clim,toClim);
-        // continental ice: this era's ice edge latitude (hemisphere-biased), plus snowball
         vec3 ICE=vec3(0.93,0.95,0.99);
         float edge=uIceEdge + (lat>0.0 ? max(0.0,uHemi) : max(0.0,-uHemi))*25.0;
         float iceAmt=smoothstep(edge-9.0, edge+7.0, al+micro*7.0-3.5);
         iceAmt=max(iceAmt, uSnowball*(0.72+0.28*micro));
         col=mix(col, ICE, iceAmt);
-        // snow on high peaks — broad when the climate is cold, else only high latitudes
         float cold=smoothstep(88.0,35.0,uIceEdge);
         float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*clamp(cold*0.55+smoothstep(30.0,60.0,al)*0.7,0.0,1.0);
         col=mix(col, ICE, snow*0.55*(1.0-iceAmt));
-        // real terrain relief: gently perturb normal by the elevation gradient (Mikkelsen)
-        float H=e*1.4 + micro*0.05;
+        // terrain relief: perturb normal by the elevation gradient (Mikkelsen).
+        // Lean on smoothed topo + fine noise rather than raw texel steps.
+        vec3 N=normalize(vWN), L2=normalize(uSun);
+        float H=e*1.05 + micro*0.06 + micro2*0.03 + overlap*0.4;
         vec3 dpx=dFdx(vWP), dpy=dFdy(vWP);
         float dHx=dFdx(H), dHy=dFdy(H);
         vec3 r1=cross(dpy,N), r2=cross(N,dpx);
         float det=dot(dpx,r1);
         vec3 sg=sign(det)*(dHx*r1+dHy*r2);
-        N=normalize(abs(det)*N - 1.1*sg);
-        float dif=clamp(dot(N,L),0.0,1.0);
+        N=normalize(abs(det)*N - 0.95*sg);
+        float dif=clamp(dot(N,L2),0.0,1.0);
         vec3 lit=col*(0.28+0.9*dif);
-        lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L)),0.0,1.0),3.0)*dif;
-        gl_FragColor=vec4(lit,uFade);
+        lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L2)),0.0,1.0),3.0)*dif;
+        gl_FragColor=vec4(lit, uFade*land);
       }`;
 
-    const plateMeshes = {};
-    const plateInfo = {};   // id -> { center: THREE.Vector3 (local unit), mass }
-    const plateIds = Object.keys(mesh.plates);
-    plateIds.forEach((id, pi) => {
-      const p = mesh.plates[id];
-      const v = p.verts, n = v.length / 2;
-      // stagger radii so overlapping plates occlude cleanly (no z-fighting)
-      const rad = CONT_R + pi * 0.0012;
-      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
-      const elev = new Float32Array(n), colr = new Float32Array(n * 3);
-      const pElev = p.elev || [], pCols = p.cols || [];
-      let ccx=0, ccy=0, ccz=0;
-      for (let i = 0; i < n; i++) {
-        const s = RECON.sph(v[i*2], v[i*2+1]);
-        pos[i*3]=s[0]*rad; pos[i*3+1]=s[1]*rad; pos[i*3+2]=s[2]*rad;
-        nor[i*3]=s[0]; nor[i*3+1]=s[1]; nor[i*3+2]=s[2];
-        elev[i]=(pElev[i]||0)/255;
-        colr[i*3]=(pCols[i*3]||128)/255; colr[i*3+1]=(pCols[i*3+1]||128)/255; colr[i*3+2]=(pCols[i*3+2]||128)/255;
-        ccx+=s[0]; ccy+=s[1]; ccz+=s[2];
-      }
-      plateInfo[id] = { center: new THREE.Vector3(ccx/n, ccy/n, ccz/n).normalize(), mass: n };
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-      g.setAttribute('aElev', new THREE.BufferAttribute(elev, 1));
-      g.setAttribute('aCol', new THREE.BufferAttribute(colr, 3));
-      g.setIndex(p.idx);
-      const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
-        uniforms: contUniforms, vertexShader: contVert, fragmentShader: contFrag,
-        transparent: true, side: THREE.DoubleSide, extensions: { derivatives: true },
-      }));
-      m.renderOrder = 1;
-      m.material.depthWrite = true;
-      earth.add(m);
-      plateMeshes[id] = m;
-    });
+    const contGeo = new THREE.SphereGeometry(CONT_R, 320, 200);
+    const contMesh = new THREE.Mesh(contGeo, new THREE.ShaderMaterial({
+      uniforms: contUniforms, vertexShader: contVert, fragmentShader: contFrag,
+      transparent: true, extensions: { derivatives: true },
+    }));
+    contMesh.renderOrder = 1;
+    contMesh.material.depthWrite = true;
+    earth.add(contMesh);
 
     // ---- Clouds --------------------------------------------------------------
     const cloudUniforms = { uSun: { value: SUN }, uTime: { value: 0 }, uOpacity: { value: 0.9 } };
@@ -412,13 +446,13 @@
 
     // ---- Reconstruction / animation state ------------------------------------
     let displayMa = 0, targetMa = 0, spinEnabled = true;
-    const _q = new THREE.Quaternion();
     function applyRecon(ma) {
       const t = Math.min(ma, 1000);
-      for (const id in plateMeshes) {
-        const q = RECON.quatAt(id, t);
-        _q.set(q[0], q[1], q[2], q[3]);
-        plateMeshes[id].quaternion.copy(_q);
+      // update each plate's reconstruction quaternion (drives the field union)
+      for (let i = 0; i < NP; i++) {
+        const q = RECON.quatAt(plateList[i].id, t);
+        uQ[i].set(q[0], q[1], q[2], q[3]);
+        curQ[i].set(q[0], q[1], q[2], q[3]);
       }
       // era-driven appearance
       const fade = 1 - smooth(1000, 1450, ma);
@@ -427,7 +461,7 @@
       oceanUniforms.uMagma.value = smooth(3200, 4200, ma);
       oceanUniforms.uGreen.value = Math.max(0, smooth(1500, 2600, ma) - oceanUniforms.uMagma.value);
       cloudUniforms.uOpacity.value = 0.85 * (1 - oceanUniforms.uMagma.value) * (0.35 + 0.65 * Math.max(fade, 0.4));
-      for (const id in plateMeshes) plateMeshes[id].visible = fade > 0.02;
+      contMesh.visible = fade > 0.02;
       // per-era glaciation (see CLIMATE table)
       const cl = climateAt(ma);
       contUniforms.uIceEdge.value = cl.edge; contUniforms.uSnowball.value = cl.snow; contUniforms.uHemi.value = cl.hemi;
@@ -435,15 +469,14 @@
     }
     function smooth(a, b, x){ const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t*t*(3-2*t); }
 
-    // Weighted centroid direction of all land at the current time. Continents
-    // that have drifted far still count; the empty ocean hemisphere is opposite.
+    // Weighted centroid direction of all land at the current time. Each plate's
+    // present-frame centre is rotated by its current reconstruction quaternion.
     const _v = new THREE.Vector3(), _acc = new THREE.Vector3();
     function landCentroid(out) {
       _acc.set(0, 0, 0);
-      for (const id in plateMeshes) {
-        if (!plateMeshes[id].visible) continue;
-        const info = plateInfo[id];
-        _v.copy(info.center).applyQuaternion(plateMeshes[id].quaternion).multiplyScalar(info.mass);
+      if (!contMesh.visible) { return out.set(0, 0, 1); }
+      for (let i = 0; i < NP; i++) {
+        _v.copy(plateList[i].center).applyQuaternion(curQ[i]).multiplyScalar(plateList[i].mass);
         _acc.add(_v);
       }
       if (_acc.lengthSq() < 1e-9) _acc.set(0, 0, 1);
@@ -481,9 +514,6 @@
         if (spinEnabled && !userActive && !animating) yaw += dt * 0.045;
         applyOrientation();
       }
-      // view-inverse so shaders read paleo-latitude, not the viewing spin
-      _m4.makeRotationFromQuaternion(earth.quaternion).invert();
-      contUniforms.uViewInv.value.setFromMatrix4(_m4);
       oceanUniforms.uTime.value = clock; cloudUniforms.uTime.value = clock;
       controls.update();
       renderer.render(scene, camera);

@@ -25,8 +25,9 @@
   let globe, draggingSlider=false, playing=false, curIv=null, sheet=null, curMa=0;
 
   function loadMesh(){
-    if (typeof MESH !== 'undefined') return Promise.resolve(MESH);
-    return fetch('./data/plates-mesh.json').then(r=>r.json());
+    // window.FIELD is the plate distance-field atlas + textures (field-embed.js)
+    if (typeof FIELD !== 'undefined') return Promise.resolve(FIELD);
+    return fetch('./data/field-embed.js').then(r=>r.text()).then(t=>{ (0,eval)(t); return window.FIELD; });
   }
 
   function buildTimeline(){
