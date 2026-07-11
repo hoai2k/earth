@@ -28,11 +28,13 @@ const toXY = (img, lon, lat) => [ (lon + 180) / 360 * img.width, (90 - lat) / 18
 // land-likeness score: high for green/tan/white, low for ocean blue
 const landScore = ([r, g, b]) => (r + g) - 1.35 * b;
 
-function sampleLand(lon, lat) {
+function sampleLand(lon, lat, coast) {
   const [cx, cy] = toXY(col, lon, lat);
   let best = null, bestScore = -1e9, bestOff = [0, 0];
-  // expanding rings: 0, 1, 2, 3 px (at 4096w, 3px ~ 0.26 deg)
-  for (let r = 0; r <= 3; r++) {
+  // Offshore feather vertices (low coverage) sit up to ~2deg out to sea, so
+  // widen the search there to pull in the nearest land colour instead of blue.
+  const maxR = coast < 0.7 ? 28 : 3;  // 28px @4096w ~ 2.5 deg
+  for (let r = 0; r <= maxR; r++) {
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
       const p = pixel(col, cx + dx, cy + dy);
@@ -54,8 +56,10 @@ for (const id of Object.keys(mesh.plates)) {
   const n = p.verts.length / 2;
   const cols = new Array(n * 3);
   const elev = new Array(n);
+  const pCoast = p.coast || [];
   for (let i = 0; i < n; i++) {
-    const { rgb, elev: e } = sampleLand(p.verts[i * 2], p.verts[i * 2 + 1]);
+    const coast = (pCoast[i] != null ? pCoast[i] : 255) / 255;
+    const { rgb, elev: e } = sampleLand(p.verts[i * 2], p.verts[i * 2 + 1], coast);
     cols[i * 3] = rgb[0]; cols[i * 3 + 1] = rgb[1]; cols[i * 3 + 2] = rgb[2];
     elev[i] = e;
     total++;

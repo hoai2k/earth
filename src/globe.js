@@ -265,15 +265,15 @@
     // climate palette, since modern biomes wouldn't survive the journey.
     const contUniforms = { uSun: { value: SUN }, uFade: { value: 1 }, uClimate: { value: 0 },
       uIceEdge: { value: 62 }, uSnowball: { value: 0 }, uHemi: { value: 0 }, uViewInv: { value: new THREE.Matrix3() } };
-    const contVert = `attribute float aElev; attribute vec3 aCol;
-      varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP; varying float vElev; varying vec3 vCol;
+    const contVert = `attribute float aElev; attribute vec3 aCol; attribute float aCoast;
+      varying vec3 vWN; varying vec3 vLocal; varying vec3 vWP; varying float vElev; varying vec3 vCol; varying float vCoast;
       void main(){ vLocal=normalize(position); vWN=normalize(mat3(modelMatrix)*normalize(position));
-      vElev=aElev; vCol=aCol; vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz;
+      vElev=aElev; vCol=aCol; vCoast=aCoast; vec4 wp=modelMatrix*vec4(position,1.0); vWP=wp.xyz;
       gl_Position=projectionMatrix*viewMatrix*wp; }`;
     const contFrag = NOISE + `
       uniform vec3 uSun; uniform float uFade; uniform float uClimate;
       uniform float uIceEdge; uniform float uSnowball; uniform float uHemi; uniform mat3 uViewInv;
-      varying vec3 vWN,vLocal,vWP,vCol; varying float vElev;
+      varying vec3 vWN,vLocal,vWP,vCol; varying float vElev; varying float vCoast;
       vec3 climate(float lat, float e, float micro){
         float al=abs(lat);
         vec3 tropic=vec3(0.14,0.34,0.12), savanna=vec3(0.52,0.50,0.24), desert=vec3(0.74,0.64,0.42);
@@ -324,7 +324,12 @@
         float dif=clamp(dot(N,L),0.0,1.0);
         vec3 lit=col*(0.28+0.9*dif);
         lit+=vec3(0.25,0.12,0.05)*pow(clamp(1.0-abs(dot(N,L)),0.0,1.0),3.0)*dif;
-        gl_FragColor=vec4(lit,uFade);
+        // Soft coastal alpha from the blurred land-coverage field: coastlines
+        // feather out instead of ending in a razor edge, and where two plates'
+        // fringes overlap their alphas composite into one organic landmass.
+        float jit=fbm(vLocal*70.0);
+        float shore=smoothstep(0.05,0.58,vCoast+(micro*0.10-0.05)+(jit*0.10-0.05));
+        gl_FragColor=vec4(lit,uFade*shore);
       }`;
 
     const plateMeshes = {};
@@ -336,8 +341,8 @@
       // stagger radii so overlapping plates occlude cleanly (no z-fighting)
       const rad = CONT_R + pi * 0.0012;
       const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
-      const elev = new Float32Array(n), colr = new Float32Array(n * 3);
-      const pElev = p.elev || [], pCols = p.cols || [];
+      const elev = new Float32Array(n), colr = new Float32Array(n * 3), coast = new Float32Array(n);
+      const pElev = p.elev || [], pCols = p.cols || [], pCoast = p.coast || [];
       let ccx=0, ccy=0, ccz=0;
       for (let i = 0; i < n; i++) {
         const s = RECON.sph(v[i*2], v[i*2+1]);
@@ -345,6 +350,7 @@
         nor[i*3]=s[0]; nor[i*3+1]=s[1]; nor[i*3+2]=s[2];
         elev[i]=(pElev[i]||0)/255;
         colr[i*3]=(pCols[i*3]||128)/255; colr[i*3+1]=(pCols[i*3+1]||128)/255; colr[i*3+2]=(pCols[i*3+2]||128)/255;
+        coast[i]=(pCoast[i]!=null?pCoast[i]:255)/255;
         ccx+=s[0]; ccy+=s[1]; ccz+=s[2];
       }
       plateInfo[id] = { center: new THREE.Vector3(ccx/n, ccy/n, ccz/n).normalize(), mass: n };
@@ -353,13 +359,16 @@
       g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
       g.setAttribute('aElev', new THREE.BufferAttribute(elev, 1));
       g.setAttribute('aCol', new THREE.BufferAttribute(colr, 3));
+      g.setAttribute('aCoast', new THREE.BufferAttribute(coast, 1));
       g.setIndex(p.idx);
       const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
         uniforms: contUniforms, vertexShader: contVert, fragmentShader: contFrag,
         transparent: true, side: THREE.DoubleSide, extensions: { derivatives: true },
       }));
       m.renderOrder = 1;
-      m.material.depthWrite = true;
+      // depthWrite off so overlapping plates' soft coastal fringes composite
+      // (blend into one landmass) instead of one hard edge occluding another.
+      m.material.depthWrite = false;
       earth.add(m);
       plateMeshes[id] = m;
     });
