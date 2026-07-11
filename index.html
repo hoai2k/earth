@@ -1971,9 +1971,10 @@ function intervalAt(ma){
       }
       void main(){
         vec3 D=normalize(vLocal);
-        // union of the plate distance fields (degrees); track two smallest for
-        // smooth fusion, and the winning plate's present-frame direction.
-        float best=uDR*2.0, second=uDR*2.0; vec3 bestL=D; float bestPresLat=0.0;
+        // union of the plate distance fields (degrees); track the two nearest
+        // plates (field value + present-frame direction) so overlaps can BLEND
+        // and uplift instead of one plate's texture sitting on top of the other.
+        float best=uDR*2.0, second=uDR*2.0; vec3 bestL=D, secondL=D;
         for(int k=0;k<NP;k++){
           vec3 L=qrot(vec4(-uQ[k].xyz,uQ[k].w), D);
           float t=dot(L,uC[k]);
@@ -1984,8 +1985,8 @@ function intervalAt(ma){
           if(un<0.0||un>1.0||vn<0.0||vn>1.0) continue;
           vec2 uv=uRect[k].xy+vec2(un,vn)*uRect[k].zw;
           float d=texture2D(uAtlas,uv).r*(2.0*uDR)-uDR;   // decode signed degrees
-          if(d<best){ second=best; best=d; bestL=L; bestPresLat=degrees(asin(clamp(L.y,-1.0,1.0))); }
-          else if(d<second){ second=d; }
+          if(d<best){ second=best; secondL=bestL; best=d; bestL=L; }
+          else if(d<second){ second=d; secondL=L; }
         }
         float field=smin(best,second,uK);            // fuse nearby coasts
         float micro=fbm(vLocal*22.0);
@@ -1997,28 +1998,44 @@ function intervalAt(ma){
 
         float lat=degrees(asin(clamp(D.y,-1.0,1.0)));  // paleo latitude (turntable-independent)
         float al=abs(lat);
-        vec2 cuv=llUV(bestL);
+        // sample BOTH nearest plates and cross-fade by relative field depth, so
+        // a collision zone is one continuous surface (no over/under seam).
+        vec2 cuv=llUV(bestL), cuv2=llUV(secondL);
         vec3 real=pow(clamp(texture2D(uColor,cuv).rgb,0.0,1.0),vec3(2.2));
         float e=clamp(texture2D(uTopo,cuv).r,0.0,1.0);
-        // collision uplift: where two plates overlap (both well inside), grow mountains
+        float haveSecond=1.0-step(uDR*1.5,second);   // second plate actually present here
+        float bw=mix(1.0, clamp(0.5+(second-best)*0.10,0.0,1.0), haveSecond);
+        vec3 real2=pow(clamp(texture2D(uColor,cuv2).rgb,0.0,1.0),vec3(2.2));
+        float e2=clamp(texture2D(uTopo,cuv2).r,0.0,1.0);
+        real=mix(real2,real,bw);
+        e=mix(e2,e,bw);
+        float bestPresLat=degrees(asin(clamp(mix(secondL.y,bestL.y,bw),-1.0,1.0)));
+        // collision orogeny: where two plates' interiors overlap, the crust
+        // thickens — build a ridged mountain belt along the suture and let it
+        // consume the overlap (rocky, snow-capped, strong relief).
         float overlap=clamp(-best/5.0,0.0,1.0)*clamp(-second/5.0,0.0,1.0);
-        e=clamp(e+overlap*0.55,0.0,1.0);
+        float ridge=1.0-abs(2.0*micro2-1.0);         // sharp crest lines
+        float uplift=overlap*(0.55+0.45*ridge);
+        e=clamp(e+uplift*0.95,0.0,1.0);
         vec3 clim=climate(lat,e,micro);
         float latShift=clamp(abs(lat-bestPresLat)/40.0,0.0,1.0);
         float toClim=clamp(uClimate*0.8 + latShift*0.7,0.0,1.0);
         vec3 col=mix(real,clim,toClim);
+        // exposed rock over the young mountain belt
+        vec3 rock=vec3(0.40,0.34,0.27)*(0.72+0.55*micro);
+        col=mix(col, rock, smoothstep(0.10,0.55,uplift)*0.8);
         vec3 ICE=vec3(0.93,0.95,0.99);
         float edge=uIceEdge + (lat>0.0 ? max(0.0,uHemi) : max(0.0,-uHemi))*25.0;
         float iceAmt=smoothstep(edge-9.0, edge+7.0, al+micro*7.0-3.5);
         iceAmt=max(iceAmt, uSnowball*(0.72+0.28*micro));
         col=mix(col, ICE, iceAmt);
         float cold=smoothstep(88.0,35.0,uIceEdge);
-        float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*clamp(cold*0.55+smoothstep(30.0,60.0,al)*0.7,0.0,1.0);
+        float snow=smoothstep(0.5,0.82,e+micro*0.12-0.06)*clamp(cold*0.55+smoothstep(30.0,60.0,al)*0.7+uplift*0.8,0.0,1.0);
         col=mix(col, ICE, snow*0.55*(1.0-iceAmt));
         // terrain relief: perturb normal by the elevation gradient (Mikkelsen).
         // Lean on smoothed topo + fine noise rather than raw texel steps.
         vec3 N=normalize(vWN), L2=normalize(uSun);
-        float H=e*1.05 + micro*0.06 + micro2*0.03 + overlap*0.4;
+        float H=e*1.05 + micro*0.06 + micro2*0.03 + uplift*1.1;
         vec3 dpx=dFdx(vWP), dpy=dFdy(vWP);
         float dHx=dFdx(H), dHy=dFdy(H);
         vec3 r1=cross(dpy,N), r2=cross(N,dpx);
