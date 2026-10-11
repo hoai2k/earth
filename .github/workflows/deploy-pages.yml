@@ -17,6 +17,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      actions: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -41,3 +46,14 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # The uploaded site would otherwise sit in Actions storage for a day
+      # after every push, which counts against the account's quota while the
+      # repository is private. Pages keeps its own copy, so delete ours as
+      # soon as the deploy is done.
+      - name: Delete the deployed site artifact
+        if: always()
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: github-pages
+          failOnError: false
