@@ -1,5 +1,20 @@
 # Claude working agreement
 
+## Tests and deploys
+
+Pushes to `main` build and deploy only; they run no tests. Tests are your job
+before you commit:
+
+- There are no automated tests; check the change in a browser (local server)
+  before committing.
+- Say in the commit message what you ran and that it passed.
+
+Every deploy is paid for in GitHub Actions minutes while the repository is
+private, so batch a task's work into one push to `main` at the end rather than
+pushing after every small step. Pushes to a working branch run nothing. A newer
+push cancels a deploy still in progress, so a burst of pushes publishes only the
+last one.
+
 ## Models
 
 - Only a session already running on Fable may start Fable subagents, workers or helper agents. Opus,
