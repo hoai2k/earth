@@ -45,9 +45,12 @@ before you commit:
 
 Every deploy is paid for in GitHub Actions minutes while the repository is
 private, so batch a task's work into one push to `main` at the end rather than
-pushing after every small step. Pushes to a working branch run nothing. A newer
-push cancels a deploy still in progress, so a burst of pushes publishes only the
-last one.
+pushing after every small step. Pushes to a working branch run nothing. A deploy
+that is already running always finishes — never cancel one unless the owner asks
+— and pushes waiting behind it collapse into the newest one. Pushes that only
+change Markdown or `.claude/` don't deploy at all (`paths-ignore` in the deploy
+workflow), and every workflow job carries a `timeout-minutes`, so a hung run
+cannot bill for hours. Keep all three when editing a workflow.
 
 ## Models
 

@@ -3,6 +3,11 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    # Pushes that change nothing the site serves don't deploy: docs and agent
+    # notes. A push that also changes anything else deploys as usual.
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
   workflow_dispatch:
 
 permissions:
@@ -10,13 +15,21 @@ permissions:
   pages: write
   id-token: write
 
+# Never cancel a running deploy (owner's rule for every repo, unless they say
+# otherwise for this one). A deploy that has started always finishes; GitHub
+# keeps one pending run behind it, and a newer push replaces that pending run
+# for free, so a burst of pushes publishes once per deploy and the queue
+# collapses into the newest. Cancelling instead throws away the minutes a run
+# has already used, and a steady stream of pushes can cancel every deploy
+# before one finishes, leaving the site stale.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # a hung run otherwise bills up to 6 h
     permissions:
       contents: read
       pages: write
