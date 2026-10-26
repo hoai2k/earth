@@ -1,8 +1,11 @@
 name: Deploy to GitHub Pages
 
+# Deploys from the `deploy` branch, not `main`: pushing to main runs nothing,
+# and the site is published only when `deploy` is moved forward to main
+# (`git push origin main:deploy`; see "Deploy state" in CLAUDE.md).
 on:
   push:
-    branches: [main]
+    branches: [deploy]
     # Pushes that change nothing the site serves don't deploy: docs and agent
     # notes. A push that also changes anything else deploys as usual.
     paths-ignore:

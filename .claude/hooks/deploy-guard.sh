@@ -1,12 +1,14 @@
 #!/bin/sh
 # PreToolUse hook: while CLAUDE.md says "Deploy state: **DISABLED**", refuse
-# anything that would update `main` on GitHub: a git push to main, or merging
-# a pull request / writing files to main through the GitHub tools.
+# anything that would update the branch that DEPLOYS on GitHub.
+# That branch is named in CLAUDE.md ("Deploy branch: `deploy`"); a repo that
+# names none still deploys from `main`, and then `main` is what is guarded,
+# including pull-request merges through the GitHub tools.
 # The switch is read from CLAUDE.md at the moment of the push, so flipping the
-# line to **ENABLED** (when the owner explicitly asks for a push to main) is
-# all it takes to let the push through. One exception while DISABLED: a push
-# whose new commits all say [skip ci] and touch only CLAUDE.md and .claude/ --
-# that is how deploys are turned off (and this guard updated); it runs no workflow.
+# line to **ENABLED** (when the owner explicitly asks to deploy) is all it
+# takes to let the push through. While the deploy branch is still `main`, one
+# exception: a push whose new commits all say [skip ci] and touch only
+# CLAUDE.md and .claude/ -- that is how deploys are turned off; it runs nothing.
 exec python3 -I -c '
 import json, os, re, shlex, subprocess, sys
 
@@ -20,6 +22,7 @@ def git(d, *a):
     return r.stdout.strip() if r.returncode == 0 else None
 
 def disabled(d):
+    global PROT
     top = git(d, "rev-parse", "--show-toplevel")
     if not top:
         return False, None
@@ -27,13 +30,18 @@ def disabled(d):
         text = open(os.path.join(top, "CLAUDE.md"), encoding="utf-8").read()
     except OSError:
         return False, top
+    b = re.search(r"Deploy branch:\s*`([^`]+)`", text)
+    PROT = b.group(1) if b else "main"
     m = re.search(r"Deploy state:\s*\*\*(ENABLED|DISABLED)\*\*", text)
     return bool(m and m.group(1) == "DISABLED"), top
 
+PROT = "main"
+
 def refuse(why):
     print("Blocked: deploys are DISABLED for this repo (see \"Deploy state\" at the top of CLAUDE.md). "
-          + why + " Push your working branch instead and tell the owner the change is NOT on main and NOT deployed. "
-          "If the owner has explicitly asked for a push to main, first change the line to "
+          + why + " Leave the deploy branch alone and tell the owner the change is NOT deployed "
+          "(push main as usual where CLAUDE.md names a separate deploy branch; otherwise push your working branch). "
+          "If the owner has explicitly asked to deploy, first change the line to "
           "\"Deploy state: **ENABLED**\" in CLAUDE.md (following that section), then push.", file=sys.stderr)
     sys.exit(2)
 
@@ -46,10 +54,10 @@ if tool.startswith("mcp__github__"):
     name = re.sub(r"\.git$", "", url.rstrip("/").split("/")[-1])
     if ti.get("repo") and ti.get("repo") != name:
         sys.exit(0)
-    if tool.endswith("merge_pull_request"):
-        refuse("Merging a pull request updates main.")
-    if ti.get("branch") in ("main", "refs/heads/main"):
-        refuse("Writing files to main updates main.")
+    if tool.endswith("merge_pull_request") and PROT == "main":
+        refuse("Merging a pull request updates main, which deploys.")
+    if ti.get("branch") in (PROT, "refs/heads/" + PROT):
+        refuse("Writing files to " + PROT + " deploys.")
     sys.exit(0)
 
 cmd = ti.get("command") or ""
@@ -95,7 +103,9 @@ while i < len(words):
                     cur = git(d, "branch", "--show-current")
                     targets = [("HEAD", cur)]
                 for src, dst in targets:
-                    if dst in ("main", "refs/heads/main") or (dst == "HEAD" and git(d, "branch", "--show-current") == "main"):
+                    if dst in (PROT, "refs/heads/" + PROT) or (dst == "HEAD" and git(d, "branch", "--show-current") == PROT):
+                        if PROT != "main":
+                            refuse("This would push to " + PROT + ", which deploys.")
                         rng = "origin/main.." + (src or "HEAD")
                         msgs = git(top, "log", "--format=%B%x00", rng)
                         files = git(top, "diff", "--name-only", rng)
@@ -103,7 +113,7 @@ while i < len(words):
                               and all("[skip ci]" in m for m in msgs.split("\x00") if m.strip())
                               and all(f == "CLAUDE.md" or f.startswith(".claude/") for f in files.split()))
                         if not ok:
-                            refuse("This would push to main.")
+                            refuse("This would push to main, which deploys.")
         i = j + 1
         continue
     i += 1
